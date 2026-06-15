@@ -1,0 +1,134 @@
+From alice@example.com Mon Jan  1 10:00:00 2024
+From: Alice Example <alice@example.com>
+To: Bob Example <bob@example.com>
+Subject: Mixed with attachment
+Date: Mon, 01 Jan 2024 10:00:00 +0000
+Message-ID: <msg1@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="BOUNDARY1"
+
+--BOUNDARY1
+Content-Type: text/plain; charset=utf-8
+
+Body text for message 1.
+
+--BOUNDARY1
+Content-Type: text/plain
+Content-Disposition: attachment; filename="hello.txt"
+Content-Transfer-Encoding: base64
+
+QXR0YWNobWVudCBjb250ZW50IGhlcmUuCg==
+--BOUNDARY1--
+
+From bob@example.com Mon Jan  1 11:00:00 2024
+From: Bob Example <bob@example.com>
+To: Alice Example <alice@example.com>
+Subject: Alternative no attachment
+Date: Mon, 01 Jan 2024 11:00:00 +0000
+Message-ID: <msg2@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="BOUNDARY2"
+
+--BOUNDARY2
+Content-Type: text/plain; charset=utf-8
+
+Plain version.
+
+--BOUNDARY2
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>HTML version.</p></body></html>
+--BOUNDARY2--
+
+From carol@example.com Mon Jan  1 12:00:00 2024
+From: Carol Example <carol@example.com>
+To: Bob Example <bob@example.com>
+Subject: Text attachment notes
+Date: Mon, 01 Jan 2024 12:00:00 +0000
+Message-ID: <msg3@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="BOUNDARY3"
+
+--BOUNDARY3
+Content-Type: text/plain; charset=utf-8
+
+See attached notes.
+
+--BOUNDARY3
+Content-Type: text/plain
+Content-Disposition: attachment; filename="notes.txt"
+Content-Transfer-Encoding: base64
+
+VGhlc2UgYXJlIG15IG5vdGVzLgo=
+--BOUNDARY3--
+
+From dave@example.com Mon Jan  1 13:00:00 2024
+From: Dave Example <dave@example.com>
+To: Bob Example <bob@example.com>
+Subject: Inline image
+Date: Mon, 01 Jan 2024 13:00:00 +0000
+Message-ID: <msg4@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="BOUNDARY4"
+
+--BOUNDARY4
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>See image: <img src="cid:test-image"></p></body></html>
+--BOUNDARY4
+Content-Type: image/png; name="pic.png"
+Content-Disposition: inline; filename="pic.png"
+Content-ID: <test-image>
+Content-Transfer-Encoding: base64
+
+UE5HREFUQTEyMw==
+--BOUNDARY4--
+
+From eve@example.com Mon Jan  1 14:00:00 2024
+From: Eve Example <eve@example.com>
+To: Bob Example <bob@example.com>
+Subject: Has attached email
+Date: Mon, 01 Jan 2024 14:00:00 +0000
+Message-ID: <msg5@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="BOUNDARY5"
+
+--BOUNDARY5
+Content-Type: text/plain; charset=utf-8
+
+See attached email.
+
+--BOUNDARY5
+Content-Type: message/rfc822
+Content-Disposition: attachment
+
+From: inner@example.com
+To: someone@example.com
+Subject: Inner message
+Date: Wed, 03 Jan 2024 09:00:00 +0000
+
+This is the inner message body.
+
+--BOUNDARY5--
+
+From frank@example.com Mon Jan  1 15:00:00 2024
+From: Frank Example <frank@example.com>
+To: Bob Example <bob@example.com>
+Subject: Inline image no filename
+Date: Mon, 01 Jan 2024 15:00:00 +0000
+Message-ID: <msg7@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="BOUNDARY7"
+
+--BOUNDARY7
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>Logo: <img src="cid:logo123"></p></body></html>
+--BOUNDARY7
+Content-Type: image/png
+Content-Disposition: inline
+Content-ID: <logo123>
+Content-Transfer-Encoding: base64
+
+TE9HT0JZVEVTNDU=
+--BOUNDARY7--

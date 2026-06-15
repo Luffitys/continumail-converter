@@ -1,0 +1,8 @@
+From nodate@example.com Thu Jan  1 00:00:00 2020
+From: No Date <nodate@example.com>
+To: Bob Example <bob@example.com>
+Subject: Message without a date header
+Message-ID: <nodate1@example.com>
+Content-Type: text/plain; charset=utf-8
+
+This message deliberately has no Date header so dateFrom/dateTo stay null.

@@ -1,0 +1,12 @@
+{
+  "outputs": [
+    {
+      "name": "Personal",
+      "maxSizeMB": 100,
+      "folderMapping": "mirror",
+      "sources": [
+        { "path": "fixtures/sample.mbox", "type": "mbox" }
+      ]
+    }
+  ]
+}

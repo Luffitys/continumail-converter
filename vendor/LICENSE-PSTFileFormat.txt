@@ -1,0 +1,10 @@
+The code under vendor/PSTFileFormat and vendor/Utilities is vendored from:
+
+  https://github.com/ROM-Knowledgeware/PSTFileFormat
+
+Copyright (C) 2012-2016 ROM Knowledgeware. All rights reserved.
+Maintainer: Tal Aloni <tal@kmrom.com>
+
+Licensed under the GNU Lesser General Public License (LGPL), version 3 or
+(at your option) any later version. See https://www.gnu.org/licenses/lgpl-3.0.html
+for the full license text.

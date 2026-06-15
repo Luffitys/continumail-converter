@@ -1,0 +1,10 @@
+From baddate@example.com Thu Jan  1 00:00:00 2020
+From: Bad Date <baddate@example.com>
+To: Bob Example <bob@example.com>
+Subject: Message with an unparseable date header
+Date: not-a-valid-date
+Message-ID: <baddate1@example.com>
+Content-Type: text/plain; charset=utf-8
+
+This message has a Date header that MimeKit cannot parse, so it returns
+DateTimeOffset.MinValue; the parser must treat that as null (no date).

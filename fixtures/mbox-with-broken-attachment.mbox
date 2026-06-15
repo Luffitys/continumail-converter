@@ -1,0 +1,18 @@
+From alice@example.com Mon Jan  1 10:00:00 2024
+From: Alice Example <alice@example.com>
+To: Bob Example <bob@example.com>
+Subject: Broken attachment
+Date: Mon, 01 Jan 2024 10:00:00 +0000
+Message-ID: <broken1@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="BOUNDARY1"
+
+--BOUNDARY1
+Content-Type: text/plain; charset=utf-8
+
+Body text.
+
+--BOUNDARY1
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="broken.bin"
+--BOUNDARY1--

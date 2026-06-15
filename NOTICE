@@ -1,0 +1,27 @@
+ContinuMail Converter
+Copyright (c) 2026 Aksel Visby (ContinuMail)
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version (GPL-3.0-or-later). See the LICENSE file for the full text.
+
+It includes the following third-party components under their own licenses
+(all compatible with GPL-3.0; the combined work is distributed under the GPL):
+
+-------------------------------------------------------------------------------
+PSTFileFormat
+  Copyright (C) 2012-2019 ROM Knowledgeware (maintainer: Tal Aloni)
+  Licensed under the GNU Lesser General Public License, version 3 (LGPLv3).
+  License text: vendor/LICENSE-PSTFileFormat.txt
+  Source: vendored under vendor/PSTFileFormat/ (includes local modifications).
+
+  In accordance with the LGPLv3, the complete corresponding source for
+  PSTFileFormat, including this project's modifications to it, is provided in
+  this repository. Users may modify that component and rebuild the application
+  from source.
+-------------------------------------------------------------------------------
+MimeKit
+  Copyright (c) Jeffrey Stedfast.
+  Licensed under the MIT License.
+-------------------------------------------------------------------------------

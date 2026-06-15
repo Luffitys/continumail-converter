@@ -1,0 +1,30 @@
+From alice@example.com Mon Jan  1 10:00:00 2024
+From: Alice Example <alice@example.com>
+To: Bob Example <bob@example.com>
+Subject: Hello from Alice
+Date: Mon, 01 Jan 2024 10:00:00 +0000
+Message-ID: <msg1@example.com>
+Content-Type: text/plain; charset=utf-8
+
+Hi Bob,
+
+This is the first test message.
+
+Regards,
+Alice
+
+From carol@example.com Tue Jan  2 11:30:00 2024
+From: Carol Example <carol@example.com>
+To: Bob Example <bob@example.com>, Dave Example <dave@example.com>
+Cc: Eve Example <eve@example.com>
+Subject: Second message
+Date: Tue, 02 Jan 2024 11:30:00 +0000
+Message-ID: <msg2@example.com>
+Content-Type: text/plain; charset=utf-8
+
+Hi Bob and Dave,
+
+This is the second test message.
+
+Thanks,
+Carol

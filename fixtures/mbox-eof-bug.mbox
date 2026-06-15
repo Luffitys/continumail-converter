@@ -1,0 +1,41 @@
+From synthetic1@example.com Tue Nov 26 15:46:52 +0000 2024
+Delivered-To: recipient@example.com
+Return-Path: <sender@example.com>
+From: "Sender Example" <sender@example.com>
+To: recipient@example.com
+Subject:pakke
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="outer_BOUNDARY_synthetic"
+
+This is the multipart preamble (synthetic fixture content).
+
+--outer_BOUNDARY_synthetic
+Content-Type: multipart/alternative; boundary="inner_BOUNDARY_synthetic"
+
+--inner_BOUNDARY_synthetic
+Content-Type: text/plain; charset=utf-8
+
+Synthetic plain-text body for the mbox EOF-bug regression fixture.
+All content here is fabricated and contains no real personal data.
+
+--inner_BOUNDARY_synthetic
+Content-Type: text/html; charset=utf-8
+
+<p>Synthetic HTML body for the regression fixture. No real data.</p>
+
+--inner_BOUNDARY_synthetic--
+
+--outer_BOUNDARY_synthetic
+Content-Type: text/plain; charset=utf-8
+
+Synthetic second part of the first message. Fabricated content only.
+
+--outer_BOUNDARY_synthetic--
+
+From synthetic2@example.com Tue Jan 02 00:00:00 2024
+From: second@example.com
+To: recipient@example.com
+Subject: second message
+Content-Type: text/plain; charset=utf-8
+
+This is the second message body. Synthetic content, no real data.

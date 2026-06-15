@@ -1,0 +1,55 @@
+// SPDX-FileCopyrightText: 2026 Aksel Visby (ContinuMail)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+using System.Text.Json;
+using Mbox2Pst.Core.Models;
+using Mbox2Pst.Core.Reporting;
+using Xunit;
+
+namespace Mbox2Pst.Core.Tests.Reporting;
+
+public class ConversionReportJsonTests
+{
+    [Fact]
+    public void ToJson_EmptyReport_SerializesCountsCorrectly()
+    {
+        var report = new ConversionReport();
+        report.RecordConverted();
+        report.RecordConverted();
+
+        string json = report.ToJson();
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+
+        Assert.Equal(2, root.GetProperty("converted").GetInt32());
+        Assert.Equal(0, root.GetProperty("skipped").GetArrayLength());
+        Assert.Equal(0, root.GetProperty("warnings").GetArrayLength());
+    }
+
+    [Fact]
+    public void ToJson_WithSkipAndWarning_SerializesEntries()
+    {
+        var report = new ConversionReport();
+        report.RecordConverted();
+        report.RecordSkipped(new SourceReference { SourcePath = "Inbox.mbox", Identifier = "message #5" }, "bad encoding");
+        report.RecordWarning(new SourceReference { SourcePath = "Inbox.mbox", Identifier = "message #3" }, "dropped attachment");
+
+        string json = report.ToJson();
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+
+        Assert.Equal(1, root.GetProperty("converted").GetInt32());
+        Assert.Equal(1, root.GetProperty("skipped").GetArrayLength());
+        Assert.Equal(1, root.GetProperty("warnings").GetArrayLength());
+
+        JsonElement skip = root.GetProperty("skipped")[0];
+        Assert.Equal("Inbox.mbox", skip.GetProperty("source").GetString());
+        Assert.Equal("message #5", skip.GetProperty("identifier").GetString());
+        Assert.Equal("bad encoding", skip.GetProperty("reason").GetString());
+
+        JsonElement warning = root.GetProperty("warnings")[0];
+        Assert.Equal("Inbox.mbox", warning.GetProperty("source").GetString());
+        Assert.Equal("message #3", warning.GetProperty("identifier").GetString());
+        Assert.Equal("dropped attachment", warning.GetProperty("reason").GetString());
+    }
+}

@@ -1,0 +1,295 @@
+// SPDX-FileCopyrightText: 2026 Aksel Visby (ContinuMail)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use serde::Serialize;
+use std::sync::Mutex;
+use tauri::path::BaseDirectory;
+use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
+use tauri_plugin_shell::ShellExt;
+
+// Holds the single in-flight conversion's child handle so cancel_convert can
+// write to its stdin. Lock only briefly — never across an .await.
+#[derive(Default)]
+struct ConvertState(Mutex<Option<CommandChild>>);
+
+// Holds the single in-flight scan's child handle so we can reject a second
+// concurrent scan. Lock only briefly — never across an .await.
+#[derive(Default)]
+struct ScanState(Mutex<Option<CommandChild>>);
+
+async fn run_sidecar(app: &tauri::AppHandle, args: Vec<String>) -> Result<String, String> {
+    let output = app
+        .shell()
+        .sidecar("mbox2pst-cli")
+        .map_err(|e| format!("sidecar not found: {e}"))?
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run engine: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "engine exited with {:?}: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[tauri::command]
+async fn check_engine_version(app: tauri::AppHandle) -> Result<String, String> {
+    run_sidecar(&app, vec!["--version".to_string()]).await
+}
+
+#[tauri::command]
+async fn scan_sample(app: tauri::AppHandle) -> Result<String, String> {
+    let sample = app
+        .path()
+        .resolve("resources/sample.mbox", BaseDirectory::Resource)
+        .map_err(|e| format!("could not resolve bundled sample: {e}"))?;
+    let sample = sample.to_string_lossy().to_string();
+    run_sidecar(
+        &app,
+        vec!["scan".to_string(), "--input".to_string(), sample],
+    )
+    .await
+}
+
+#[derive(Serialize)]
+struct FileStat {
+    path: String,
+    size: u64,
+}
+
+#[tauri::command]
+fn list_mbox_in_dir(dir: String) -> Result<Vec<String>, String> {
+    let entries = std::fs::read_dir(&dir).map_err(|e| format!("cannot read folder: {e}"))?;
+    let mut paths: Vec<String> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("mbox"))
+                .unwrap_or(false)
+        {
+            paths.push(path.to_string_lossy().to_string());
+        }
+    }
+    paths.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    Ok(paths)
+}
+
+#[tauri::command]
+fn stat_files(paths: Vec<String>) -> Vec<FileStat> {
+    paths
+        .into_iter()
+        .map(|path| {
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            FileStat { path, size }
+        })
+        .collect()
+}
+
+#[tauri::command]
+async fn start_scan(
+    app: AppHandle,
+    paths: Vec<String>,
+    state: State<'_, ScanState>,
+) -> Result<(), String> {
+    if paths.is_empty() {
+        return Err("No files to scan.".into());
+    }
+    // Reject a second concurrent scan.
+    if state.0.lock().unwrap().is_some() {
+        return Err("A scan is already running.".into());
+    }
+
+    let mut args: Vec<String> = vec!["scan".into()];
+    for p in paths {
+        args.push("--input".into());
+        args.push(p);
+    }
+    args.push("--progress".into());
+
+    let (mut rx, child) = app
+        .shell()
+        .sidecar("mbox2pst-cli")
+        .map_err(|e| format!("sidecar not found: {e}"))?
+        .args(args)
+        .spawn()
+        .map_err(|e| format!("failed to start engine: {e}"))?;
+
+    // Store the child BEFORE the reader task starts.
+    *state.0.lock().unwrap() = Some(child);
+
+    let app_for_task = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // Buffer stdout and split on newlines — do NOT assume each Stdout event
+        // is exactly one JSON line (a record may span events or arrive batched).
+        let mut buf = String::new();
+        let mut terminated = false;
+        while let Some(event) = rx.recv().await {
+            match event {
+                CommandEvent::Stdout(bytes) => {
+                    buf.push_str(&String::from_utf8_lossy(&bytes));
+                    while let Some(nl) = buf.find('\n') {
+                        let line: String = buf.drain(..=nl).collect();
+                        let line = line.trim_end_matches(|c| c == '\r' || c == '\n').to_string();
+                        if !line.is_empty() {
+                            let _ = app_for_task.emit("scan://line", line);
+                        }
+                    }
+                }
+                CommandEvent::Stderr(bytes) => {
+                    let line = String::from_utf8_lossy(&bytes).to_string();
+                    let _ = app_for_task.emit("scan://stderr", line);
+                }
+                CommandEvent::Terminated(payload) => {
+                    terminated = true;
+                    // Flush any trailing partial line (no terminating newline).
+                    let rest = buf.trim_end_matches(|c| c == '\r' || c == '\n').to_string();
+                    if !rest.is_empty() {
+                        let _ = app_for_task.emit("scan://line", rest);
+                    }
+                    buf.clear();
+                    *app_for_task.state::<ScanState>().0.lock().unwrap() = None;
+                    let _ = app_for_task.emit("scan://exit", payload.code);
+                }
+                _ => {}
+            }
+        }
+        // Defensive: if the stream ended WITHOUT a Terminated event, no exit was
+        // emitted and the frontend Promise would hang forever. Flush any partial
+        // line, clear the slot, and emit a synthetic failure so it rejects.
+        if !terminated {
+            let rest = buf.trim_end_matches(|c| c == '\r' || c == '\n').to_string();
+            if !rest.is_empty() {
+                let _ = app_for_task.emit("scan://line", rest);
+            }
+            *app_for_task.state::<ScanState>().0.lock().unwrap() = None;
+            let _ = app_for_task.emit(
+                "scan://stderr",
+                "Scan process ended without a termination event.".to_string(),
+            );
+            let _ = app_for_task.emit("scan://exit", -1_i32);
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn start_convert(
+    app: AppHandle,
+    config: serde_json::Value,
+    output_dir: String,
+    state: State<'_, ConvertState>,
+) -> Result<(), String> {
+    // Reject a second concurrent run.
+    if state.0.lock().unwrap().is_some() {
+        return Err("A conversion is already running.".into());
+    }
+
+    // Write the config to a UNIQUE temp file the sidecar will read (per-run name
+    // avoids collisions with stale files / a second app instance).
+    let unique = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let config_path = std::env::temp_dir().join(format!("continumail-convert-config-{unique}.json"));
+    let config_text = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+    std::fs::write(&config_path, config_text).map_err(|e| format!("cannot write config: {e}"))?;
+    let config_path_str = config_path.to_string_lossy().to_string();
+
+    let (mut rx, child) = app
+        .shell()
+        .sidecar("mbox2pst-cli")
+        .map_err(|e| format!("sidecar not found: {e}"))?
+        .args(["convert", "--config", &config_path_str, "--output", &output_dir])
+        .spawn()
+        .map_err(|e| format!("failed to start engine: {e}"))?;
+
+    // Store the child BEFORE the reader task starts.
+    *state.0.lock().unwrap() = Some(child);
+
+    let app_for_task = app.clone();
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            match event {
+                CommandEvent::Stdout(bytes) => {
+                    let line = String::from_utf8_lossy(&bytes).to_string();
+                    let _ = app_for_task.emit("convert://line", line);
+                }
+                CommandEvent::Stderr(bytes) => {
+                    let line = String::from_utf8_lossy(&bytes).to_string();
+                    let _ = app_for_task.emit("convert://stderr", line);
+                }
+                CommandEvent::Terminated(payload) => {
+                    *app_for_task.state::<ConvertState>().0.lock().unwrap() = None;
+                    let _ = std::fs::remove_file(&config_path);
+                    let _ = app_for_task.emit("convert://exit", payload.code);
+                }
+                _ => {}
+            }
+        }
+        // Defensive: ensure the slot + temp file are cleared even if the stream
+        // ended without a Terminated event (both ops are idempotent/harmless if
+        // the Terminated arm already ran).
+        *app_for_task.state::<ConvertState>().0.lock().unwrap() = None;
+        let _ = std::fs::remove_file(&config_path);
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+fn cancel_convert(state: State<'_, ConvertState>) -> Result<(), String> {
+    let mut guard = state.0.lock().unwrap();
+    match guard.as_mut() {
+        Some(child) => {
+            child
+                .write(b"cancel\n")
+                .map_err(|e| format!("cancel failed: {e}"))?;
+            Ok(())
+        }
+        None => Err("No conversion is running.".into()),
+    }
+}
+
+#[tauri::command]
+fn open_folder(app: AppHandle, path: String) -> Result<(), String> {
+    app.opener()
+        .reveal_item_in_dir(&path)
+        .map_err(|e| format!("could not open folder: {e}"))
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_shell::init())
+        .manage(ConvertState::default())
+        .manage(ScanState::default())
+        .invoke_handler(tauri::generate_handler![
+            check_engine_version,
+            scan_sample,
+            list_mbox_in_dir,
+            stat_files,
+            start_convert,
+            start_scan,
+            cancel_convert,
+            open_folder
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
