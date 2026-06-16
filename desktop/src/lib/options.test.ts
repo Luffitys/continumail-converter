@@ -217,3 +217,44 @@ describe("buildConfigFromOptions", () => {
     expect(() => buildConfigFromOptions(srcs, allIds, true, opts, "D:\\out\\P.pst")).toThrow(/same name/i);
   });
 });
+
+describe("source order propagation (guardrails)", () => {
+  function mkRow(over: Partial<SourceRow>): SourceRow {
+    return {
+      id: "x", path: "x.mbox", displayName: "x", messages: 1, bytes: 1,
+      sourceBytes: 1, dateFrom: null, dateTo: null, warnings: 0, skipped: 0, ...over,
+    };
+  }
+  const a = mkRow({ id: "a", path: "a.mbox", displayName: "Apple" });
+  const b = mkRow({ id: "b", path: "b.mbox", displayName: "Banana" });
+  const ids = new Set(["a", "b"]);
+
+  it("buildPstPreview folders follow the given source array order", () => {
+    expect(buildPstPreview([a, b], ids, false, defaultOptions(), "P").folders.map((f) => f.sourceId))
+      .toEqual(["a", "b"]);
+    expect(buildPstPreview([b, a], ids, false, defaultOptions(), "P").folders.map((f) => f.sourceId))
+      .toEqual(["b", "a"]);
+  });
+
+  it("buildConfigFromOptions sources follow the given INPUT order (write path is input order, not a sort)", () => {
+    const r1 = buildConfigFromOptions([a, b], ids, false, defaultOptions(), "D:\\out\\P.pst");
+    expect(r1.config.outputs[0].sources.map((s) => s.path)).toEqual(["a.mbox", "b.mbox"]);
+    const r2 = buildConfigFromOptions([b, a], ids, false, defaultOptions(), "D:\\out\\P.pst");
+    expect(r2.config.outputs[0].sources.map((s) => s.path)).toEqual(["b.mbox", "a.mbox"]);
+  });
+});
+
+describe("validateFolderName parity table (mirror of FolderNameValidatorTests.cs)", () => {
+  // Keep these two arrays identical (case-for-case) to the C# parity table in
+  // tests/Mbox2Pst.Core.Tests/Config/FolderNameValidatorTests.cs. The engine validator
+  // (src/Mbox2Pst.Core/Config/FolderNameValidator.cs) must agree on every case.
+  const valid = ["Imported Mail", "Work", "2024 Archive", "a.b", "Folder.name.with.dots", "café"];
+  const invalid = ["", "   ", "a/b", "a\\b", "tab\there", " leading", "trailing ", ".hidden", "trailing.", "CON", "con.txt", "COM1", "LPT9.log"];
+
+  it.each(valid)("accepts %j", (name) => {
+    expect(validateFolderName(name)).toBeNull();
+  });
+  it.each(invalid)("rejects %j", (name) => {
+    expect(validateFolderName(name)).not.toBeNull();
+  });
+});

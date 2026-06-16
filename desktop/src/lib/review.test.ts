@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, it, expect } from "vitest";
-import { effectiveRows, calculateReviewTotals } from "./review";
+import { effectiveRows, calculateReviewTotals, sortSources, nextSort } from "./review";
 import type { SourceRow } from "./types";
 
 function row(over: Partial<SourceRow>): SourceRow {
@@ -46,5 +46,64 @@ describe("calculateReviewTotals", () => {
     expect(calculateReviewTotals(all, ids, false)).toEqual({
       messages: 0, bytes: 0, folders: 1, dateFrom: null, dateTo: null,
     });
+  });
+});
+
+describe("sortSources", () => {
+  const f10 = row({ id: "f10", displayName: "Folder 10", messages: 5, bytes: 50, dateFrom: "2019-01-01T00:00:00Z" });
+  const f2 = row({ id: "f2", displayName: "folder 2", messages: 20, bytes: 200, dateFrom: "2010-01-01T00:00:00Z" });
+  const f1 = row({ id: "f1", displayName: "Folder 1", messages: 20, bytes: 200, dateFrom: null });
+  const base = [f10, f2, f1];
+
+  it("default returns original order, a new array, and does not mutate input", () => {
+    const out = sortSources(base, "default", "desc");
+    expect(out.map((r) => r.id)).toEqual(["f10", "f2", "f1"]);
+    expect(out).not.toBe(base);
+    expect(base.map((r) => r.id)).toEqual(["f10", "f2", "f1"]);
+  });
+
+  it("name asc uses numeric, case-insensitive collation (Folder 2 before Folder 10)", () => {
+    expect(sortSources(base, "name", "asc").map((r) => r.id)).toEqual(["f1", "f2", "f10"]);
+  });
+  it("name desc reverses", () => {
+    expect(sortSources(base, "name", "desc").map((r) => r.id)).toEqual(["f10", "f2", "f1"]);
+  });
+
+  it("messages asc then desc (ties keep input order)", () => {
+    expect(sortSources(base, "messages", "asc").map((r) => r.id)).toEqual(["f10", "f2", "f1"]);
+    expect(sortSources(base, "messages", "desc").map((r) => r.id)).toEqual(["f2", "f1", "f10"]);
+  });
+
+  it("size asc then desc", () => {
+    expect(sortSources(base, "size", "asc").map((r) => r.id)).toEqual(["f10", "f2", "f1"]);
+    expect(sortSources(base, "size", "desc").map((r) => r.id)).toEqual(["f2", "f1", "f10"]);
+  });
+
+  it("date asc = oldest first, null dateFrom always last", () => {
+    expect(sortSources(base, "date", "asc").map((r) => r.id)).toEqual(["f2", "f10", "f1"]);
+  });
+  it("date desc = newest first, null dateFrom STILL last", () => {
+    expect(sortSources(base, "date", "desc").map((r) => r.id)).toEqual(["f10", "f2", "f1"]);
+  });
+
+  it("is stable for equal keys (messages tie keeps input order, both directions of input)", () => {
+    expect(sortSources([f2, f1], "messages", "asc").map((r) => r.id)).toEqual(["f2", "f1"]);
+    expect(sortSources([f1, f2], "messages", "asc").map((r) => r.id)).toEqual(["f1", "f2"]);
+  });
+});
+
+describe("nextSort", () => {
+  it("clicking an inactive column sorts it ascending", () => {
+    expect(nextSort("default", "desc", "size")).toEqual({ field: "size", dir: "asc" });
+    expect(nextSort("name", "asc", "messages")).toEqual({ field: "messages", dir: "asc" });
+  });
+  it("clicking the active ascending column flips to descending", () => {
+    expect(nextSort("size", "asc", "size")).toEqual({ field: "size", dir: "desc" });
+  });
+  it("clicking the active descending column flips to ascending", () => {
+    expect(nextSort("size", "desc", "size")).toEqual({ field: "size", dir: "asc" });
+  });
+  it("clicking a different active column resets to ascending", () => {
+    expect(nextSort("date", "desc", "name")).toEqual({ field: "name", dir: "asc" });
   });
 });

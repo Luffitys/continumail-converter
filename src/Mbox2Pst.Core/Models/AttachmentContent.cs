@@ -31,6 +31,9 @@ public sealed class AttachmentContent : IDisposable
     public static AttachmentContent FromTempFile(string path, long length) =>
         new(null, path, length);
 
+    // Materializes the whole attachment in memory (in-memory bytes, or the entire temp
+    // file). The temp-file path bounds the parse/write queue's sustained memory, not peak —
+    // see MboxParser.ToAttachmentContent.
     public byte[] ReadAllBytes()
     {
         if (_disposed)

@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using Mbox2Pst.Core.Models;
 using MimeKit;
 
@@ -89,51 +90,51 @@ public class MboxParser : IMailSourceParser
 
     /// <summary>
     /// Counts the number of messages in an mbox stream by scanning for "From " boundary
-    /// lines, using the same mboxrd rule as <see cref="SplitMessages"/>: a line starting
-    /// with "From " is a boundary only if the previous line was blank (or it is the first
-    /// line). Runs in O(n) time with a fixed-size read buffer and no per-message allocation.
+    /// lines, using the same rule as <see cref="SplitMessages"/> via the shared
+    /// <see cref="IsMessageBoundary"/> helper: a line starting with "From " is a boundary
+    /// if the previous line was blank (or it is the first line), OR the line itself matches
+    /// the envelope postmark shape. Runs in O(n) time with a small, fixed read buffer and
+    /// minimal per-line allocation (one pooled MemoryStream, re-used across lines).
     /// </summary>
     private static int CountBoundaries(Stream rawStream)
     {
         var buffer = new byte[BufferSize];
-        int count = 0;
+        using var line = new MemoryStream(256);
         bool previousLineWasBlank = true;
-        bool lineIsBlank = true;
-        bool lineCouldBeFrom = true;
-        int matchPos = 0;
+        int count = 0;
 
         int bytesRead;
         while ((bytesRead = rawStream.Read(buffer, 0, buffer.Length)) > 0)
         {
-            for (int i = 0; i < bytesRead; i++)
+            int offset = 0;
+            while (offset < bytesRead)
             {
-                byte b = buffer[i];
-                if (b == (byte)'\n')
+                int newlineIndex = Array.IndexOf(buffer, (byte)'\n', offset, bytesRead - offset);
+                if (newlineIndex == -1)
                 {
-                    if (previousLineWasBlank && lineCouldBeFrom && matchPos >= FromMarker.Length)
-                        count++;
-                    previousLineWasBlank = lineIsBlank;
-                    lineIsBlank = true;
-                    lineCouldBeFrom = true;
-                    matchPos = 0;
+                    line.Write(buffer, offset, bytesRead - offset);
+                    break;
                 }
-                else if (b != (byte)'\r')
-                {
-                    lineIsBlank = false;
-                    if (lineCouldBeFrom && matchPos < FromMarker.Length)
-                    {
-                        if (b == FromMarker[matchPos])
-                            matchPos++;
-                        else
-                            lineCouldBeFrom = false;
-                    }
-                }
+
+                int lineLength = newlineIndex - offset + 1;
+                line.Write(buffer, offset, lineLength);
+                offset = newlineIndex + 1;
+
+                ReadOnlySpan<byte> lineSpan = line.GetBuffer().AsSpan(0, (int)line.Length);
+                if (IsMessageBoundary(lineSpan, previousLineWasBlank))
+                    count++;
+                previousLineWasBlank = IsBlankLine(lineSpan);
+                line.SetLength(0);
             }
         }
 
-        // After the while loop, flush the final line if file doesn't end with \n
-        if (previousLineWasBlank && lineCouldBeFrom && matchPos >= FromMarker.Length)
-            count++;
+        // Flush the final line if the file doesn't end with '\n'.
+        if (line.Length > 0)
+        {
+            ReadOnlySpan<byte> lineSpan = line.GetBuffer().AsSpan(0, (int)line.Length);
+            if (IsMessageBoundary(lineSpan, previousLineWasBlank))
+                count++;
+        }
 
         return count;
     }
@@ -178,7 +179,7 @@ public class MboxParser : IMailSourceParser
                 byte[] lineBytes = line.ToArray();
                 line.SetLength(0);
 
-                bool isBoundary = previousLineWasBlank && StartsWithFromMarker(lineBytes);
+                bool isBoundary = IsMessageBoundary(lineBytes, previousLineWasBlank);
                 if (isBoundary)
                 {
                     if (currentHasContent)
@@ -191,7 +192,8 @@ public class MboxParser : IMailSourceParser
                 }
                 else
                 {
-                    current.Write(lineBytes, 0, lineBytes.Length);
+                    byte[] contentBytes = UnescapeFromLine(lineBytes);
+                    current.Write(contentBytes, 0, contentBytes.Length);
                     currentHasContent = true;
                 }
 
@@ -202,10 +204,11 @@ public class MboxParser : IMailSourceParser
         if (line.Length > 0)
         {
             byte[] lineBytes = line.ToArray();
-            bool isBoundary = previousLineWasBlank && StartsWithFromMarker(lineBytes);
+            bool isBoundary = IsMessageBoundary(lineBytes, previousLineWasBlank);
             if (!isBoundary)
             {
-                current.Write(lineBytes, 0, lineBytes.Length);
+                byte[] contentBytes = UnescapeFromLine(lineBytes);
+                current.Write(contentBytes, 0, contentBytes.Length);
                 currentHasContent = true;
             }
         }
@@ -217,16 +220,25 @@ public class MboxParser : IMailSourceParser
         }
     }
 
-    private static bool StartsWithFromMarker(byte[] line)
+    // Matches the mbox "From " postmark / envelope line in asctime form, e.g.
+    // "From sender@host Mon Jan  1 00:00:00 2020" (optional timezone token before
+    // the year). Specific enough that ordinary body lines beginning "From " (e.g.
+    // "From now on ...") do not match, so it is a safe fallback boundary signal
+    // for files whose messages are not separated by a blank line.
+    private static readonly Regex EnvelopePostmark = new Regex(
+        @"^From \S+ \w{3} \w{3}\s+\d{1,2} \d{2}:\d{2}:\d{2}(\s+\S+)? \d{4}\s*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static bool StartsWithMarkerAt(ReadOnlySpan<byte> line, int index, ReadOnlySpan<byte> marker)
     {
-        if (line.Length < FromMarker.Length)
+        if (line.Length - index < marker.Length)
         {
             return false;
         }
 
-        for (int i = 0; i < FromMarker.Length; i++)
+        for (int i = 0; i < marker.Length; i++)
         {
-            if (line[i] != FromMarker[i])
+            if (line[index + i] != marker[i])
             {
                 return false;
             }
@@ -235,7 +247,44 @@ public class MboxParser : IMailSourceParser
         return true;
     }
 
-    private static bool IsBlankLine(byte[] line)
+    // mboxrd un-escaping: a body line that originally matched ^>*From  was stored
+    // with one extra leading '>' to distinguish it from a real envelope boundary.
+    // Strip exactly one '>' from any line of the form ^>+From  to restore the
+    // original text. Non-escaped lines are returned unchanged (no copy).
+    private static byte[] UnescapeFromLine(byte[] line)
+    {
+        int gt = 0;
+        while (gt < line.Length && line[gt] == (byte)'>')
+            gt++;
+
+        if (gt == 0 || !StartsWithMarkerAt(line, gt, FromMarker))
+            return line;
+
+        var result = new byte[line.Length - 1];
+        Array.Copy(line, 1, result, 0, line.Length - 1);
+        return result;
+    }
+
+    private static bool StartsWithFromMarker(ReadOnlySpan<byte> line) =>
+        StartsWithMarkerAt(line, 0, FromMarker);
+
+    private static bool IsEnvelopePostmark(ReadOnlySpan<byte> line)
+    {
+        // From lines are ASCII; decode and drop the trailing newline before matching.
+        // Only reached for "From " lines NOT preceded by a blank line, so this is rare.
+        string text = Encoding.ASCII.GetString(line).TrimEnd('\r', '\n');
+        return EnvelopePostmark.IsMatch(text);
+    }
+
+    // A line is a message boundary when it starts with the "From " marker AND
+    // either the previous line was blank (the common mbox case; previousLineWasBlank
+    // is initialised true so the first line qualifies) OR the line itself matches
+    // the envelope postmark shape (so messages with no blank separator still split,
+    // without splitting on unescaped body lines that merely begin with "From ").
+    private static bool IsMessageBoundary(ReadOnlySpan<byte> line, bool previousLineWasBlank) =>
+        StartsWithFromMarker(line) && (previousLineWasBlank || IsEnvelopePostmark(line));
+
+    private static bool IsBlankLine(ReadOnlySpan<byte> line)
     {
         foreach (byte b in line)
         {
@@ -454,6 +503,12 @@ public class MboxParser : IMailSourceParser
         return attachments;
     }
 
+    // Routes attachment bytes to memory (small) or a temp file (large) to bound the
+    // SUSTAINED memory of the bounded parse/write queue — a queued temp-backed attachment
+    // holds only a path, not its bytes. This does NOT reduce PEAK memory: the part is
+    // already fully decoded into `buffer` (a MemoryStream) before this point, and the temp
+    // file is read back in full at write time (AttachmentContent.ReadAllBytes -> PstWriter).
+    // It is queue-memory hygiene, not end-to-end streaming.
     private AttachmentContent ToAttachmentContent(MemoryStream buffer)
     {
         if (buffer.Length < _tempFileThresholdBytes)

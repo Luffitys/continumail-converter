@@ -96,6 +96,7 @@ public class PstWriter
 
         var file = new PSTFile(currentPath, FileAccess.ReadWrite);
         bool cancelled = false;
+        ExceptionDispatchInfo? faultCapture = null;
         try
         {
             file.BeginSavingChanges();
@@ -113,6 +114,7 @@ public class PstWriter
             }
 
             int messagesSinceCheck = 0;
+            int messagesInCurrentPart = 0;   // genuinely-written messages in the current part (reset on split)
             long templateSize = new FileInfo(_templatePath).Length;
 
             // The underlying PST file does not necessarily grow by a measurable
@@ -154,18 +156,76 @@ public class PstWriter
                     currentSource, currentFolder, estimatedOutputBytes));
             }
 
+            // Closes the current (already-flushed) part and opens the next one.
+            // PRECONDITION: the caller has just called file.EndSavingChanges(), so the
+            // current file is flushed and can be closed cleanly. Renames the initial
+            // "Name.pst" to "Name-1.pst" on the first split, opens the next part with
+            // BeginSavingChanges active, and resets the per-part counters/estimate.
+            // Exception-safety: the next part is fully created/opened into LOCALS before the
+            // shared currentPath/outputFiles/file/partNumber are reassigned, so a
+            // StartNewFile/PSTFile failure leaves those pointing at the last good state
+            // rather than a half-initialized new part.
+            void StartNextPartAfterFlush()
+            {
+                file.CloseFile();
+                if (partNumber == 1)
+                {
+                    // First split: the initial "Name.pst" becomes part 1.
+                    string part1 = ResolveOutputPath(plan.Name, 1, outputDirectory);
+                    File.Move(currentPath, part1, overwrite: true);
+                    outputFiles[0] = part1;
+                }
+
+                int nextPartNumber = partNumber + 1;
+                string nextPath = StartNewFile(plan.Name, nextPartNumber, outputDirectory);
+                var nextFile = new PSTFile(nextPath, FileAccess.ReadWrite);
+                nextFile.BeginSavingChanges();
+
+                // New part is open and ready — only now mutate shared state.
+                partNumber = nextPartNumber;
+                currentPath = nextPath;
+                outputFiles.Add(nextPath);
+                file = nextFile;
+                folders.Clear();
+                estimatedContentBytes = 0;
+                messagesSinceCheck = 0;
+                messagesInCurrentPart = 0;
+            }
+
             foreach (PlannedMessage planned in queue.GetConsumingEnumerable())
             {
                 currentSource = planned.Message.Source.SourcePath;
                 currentFolder = planned.TargetFolderName;
+
                 long messageSize = 0;
                 bool written = false;
                 try
                 {
+                    // Check cancellation BEFORE the predictive split so a cancelled run never
+                    // creates an extra part — the in-progress part stays the one deleted on
+                    // cancel (keeps WritePlan_CancelledDuringSplit_* correct). Inside the
+                    // try so the finally always disposes this dequeued message's attachments
+                    // even when cancel fires before the write starts.
                     cancellationToken.ThrowIfCancellationRequested();
-                    PSTFolder folder = GetOrCreateFolder(file, folders, planned.TargetFolderName);
+
+                    // Estimate BEFORE writing so we can split predictively. EstimateMessageSize
+                    // only reads message fields + stored attachment lengths (no I/O).
                     messageSize = EstimateMessageSize(planned.Message);
-                    WriteMessage(file, folder, planned.Message);
+
+                    // Predictive split: if writing this message would push the running
+                    // estimate over the cap and the current part already has content, split
+                    // first so the crossing message starts a fresh part. messagesInCurrentPart
+                    // > 0 guards the single-oversized-message case (a fresh part can't be
+                    // split — write the big message whole).
+                    if (messagesInCurrentPart > 0 &&
+                        templateSize + estimatedContentBytes + messageSize >= plan.MaxSizeBytes)
+                    {
+                        file.EndSavingChanges();
+                        StartNextPartAfterFlush();
+                    }
+
+                    PSTFolder folder = GetOrCreateFolder(file, folders, planned.TargetFolderName);
+                    WriteMessageCore(file, folder, planned.Message);
                     report.RecordConverted();
                     written = true;
                 }
@@ -173,7 +233,7 @@ public class PstWriter
                 {
                     throw;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (IsRecoverableWriteError(ex))
                 {
                     report.RecordSkipped(planned.Message.Source, ex.Message);
                 }
@@ -187,6 +247,7 @@ public class PstWriter
 
                 estimatedContentBytes += messageSize;
                 estimatedOutputBytes += messageSize;
+                messagesInCurrentPart++;
                 messagesSinceCheck++;
                 messagesSinceProgress++;
                 if (messagesSinceProgress >= _progressIntervalMessages)
@@ -194,34 +255,22 @@ public class PstWriter
                     EmitProgress();
                     messagesSinceProgress = 0;
                 }
-                if (messagesSinceCheck < _checkIntervalMessages)
-                {
-                    continue;
-                }
 
-                file.EndSavingChanges();
-                EmitProgress();
-                long size = Math.Max(file.BaseStream.Length, templateSize + estimatedContentBytes);
-                if (size >= plan.MaxSizeBytes)
+                if (messagesSinceCheck >= _checkIntervalMessages)
                 {
-                    file.CloseFile();
-                    if (partNumber == 1)
+                    file.EndSavingChanges();
+                    EmitProgress();
+                    long size = Math.Max(file.BaseStream.Length, templateSize + estimatedContentBytes);
+                    if (size >= plan.MaxSizeBytes)
                     {
-                        // First split: the initial "Name.pst" becomes part 1.
-                        string part1 = ResolveOutputPath(plan.Name, 1, outputDirectory);
-                        File.Move(currentPath, part1, overwrite: true);
-                        outputFiles[0] = part1;
+                        StartNextPartAfterFlush();   // resets messagesSinceCheck + leaves BeginSavingChanges active
                     }
-                    partNumber++;
-                    currentPath = StartNewFile(plan.Name, partNumber, outputDirectory);
-                    outputFiles.Add(currentPath);
-                    file = new PSTFile(currentPath, FileAccess.ReadWrite);
-                    folders.Clear();
-                    estimatedContentBytes = 0;
+                    else
+                    {
+                        messagesSinceCheck = 0;
+                        file.BeginSavingChanges();
+                    }
                 }
-
-                file.BeginSavingChanges();
-                messagesSinceCheck = 0;
             }
 
             file.EndSavingChanges();
@@ -234,10 +283,13 @@ public class PstWriter
             cancelled = true;
             cts.Cancel();
         }
-        catch
+        catch (Exception ex)
         {
+            // Fatal write failure: capture (preserving the original stack), stop the
+            // producer, let `finally` close the handle, then delete the in-progress part
+            // below — never leave a half-written PST that looks usable.
+            faultCapture = ExceptionDispatchInfo.Capture(ex);
             cts.Cancel();
-            throw;
         }
         finally
         {
@@ -265,8 +317,19 @@ public class PstWriter
             throw new OperationCanceledException(cancellationToken);
         }
 
-        if (producerException is not null)
-            ExceptionDispatchInfo.Capture(producerException).Throw();
+        // Fatal path: a consumer write fault (faultCapture) or a producer/parse fault
+        // (producerException) aborted the run. The handle is closed, so delete only the
+        // in-progress part (currentPath always points to the newest part — covers a fatal
+        // right after a split, before any message was written to the new part), keep any
+        // completed split parts, then rethrow the ORIGINAL exception so ConversionRunner
+        // emits the fatal `error` event (exit 1).
+        ExceptionDispatchInfo? fatal = faultCapture
+            ?? (producerException is not null ? ExceptionDispatchInfo.Capture(producerException) : null);
+        if (fatal is not null)
+        {
+            TryDeletePart(currentPath);
+            fatal.Throw();
+        }
 
         return outputFiles;
     }
@@ -377,6 +440,23 @@ public class PstWriter
         folders[folderName] = folder;
         return folder;
     }
+
+    // Per-message write, extracted as an overridable seam so tests can inject a
+    // deterministic write failure without contriving exotic message data. Production
+    // behavior is unchanged — it simply calls WriteMessage. internal: visible to the
+    // test assembly via InternalsVisibleTo("Mbox2Pst.Core.Tests").
+    internal virtual void WriteMessageCore(PSTFile file, PSTFolder folder, MailMessage message)
+        => WriteMessage(file, folder, message);
+
+    // A PST writer failure is fatal unless PROVEN to be one bad message. By the time we
+    // write, the message has parsed successfully, so a write failure is almost certainly
+    // a bug, a vendored PST-library failure, invalid internal state, or a filesystem/temp
+    // problem — all of which must surface as fatal (mirroring the parse-side taxonomy in
+    // MboxParser). This allowlist is intentionally EMPTY: add a specific exception type
+    // ONLY after a real data-driven write failure is observed and proven safely skippable.
+    // Keeping the predicate + catch-filter makes that a one-line change. This is a
+    // deliberate, documented extension seam — NOT dead code to "clean up".
+    internal static bool IsRecoverableWriteError(Exception ex) => false;
 
     private static void WriteMessage(PSTFile file, PSTFolder folder, MailMessage message)
     {

@@ -15,11 +15,12 @@ import {
   SPLIT_PRESETS,
   type OptionsState,
 } from "@/lib/options";
-import type { ConversionConfig } from "@/lib/types";
+import type { ConversionConfig, SourceRow } from "@/lib/types";
 import type { ScanResult } from "@/lib/parse";
 
 interface OptionsViewProps {
   scan: ScanResult;
+  previewSources: SourceRow[];
   outputPath: string;
   checkedIds: Set<string>;
   skipEmpty: boolean;
@@ -31,7 +32,7 @@ interface OptionsViewProps {
 }
 
 export function OptionsView({
-  scan, outputPath, checkedIds, skipEmpty, options, onSetOptions, onSetRename, onStart, onBack,
+  scan, previewSources, outputPath, checkedIds, skipEmpty, options, onSetOptions, onSetRename, onStart, onBack,
 }: OptionsViewProps) {
   const [startError, setStartError] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
@@ -48,8 +49,8 @@ export function OptionsView({
   }, [outputPath]);
 
   const preview = useMemo(
-    () => buildPstPreview(scan.sources, checkedIds, skipEmpty, options, pstName),
-    [scan.sources, checkedIds, skipEmpty, options, pstName],
+    () => buildPstPreview(previewSources, checkedIds, skipEmpty, options, pstName),
+    [previewSources, checkedIds, skipEmpty, options, pstName],
   );
 
   const duplicateIds = useMemo(() => findDuplicateFolderIds(preview.folders), [preview.folders]);
@@ -153,6 +154,9 @@ export function OptionsView({
         {/* right: live preview tree */}
         <div className="flex flex-1 flex-col overflow-hidden">
           <div className="mb-1 text-sm font-medium text-foreground">Preview</div>
+          <p className="mb-2 text-xs text-light-gray">
+            Renaming changes a folder's name, not its display order — Outlook lists PST folders alphabetically when the archive is opened.
+          </p>
           <div className="flex-1 overflow-auto rounded-lg border border-border p-3 text-sm">
             <div className="font-semibold text-foreground">{preview.pstName}.pst</div>
             <div className="mt-1 flex flex-col gap-1">

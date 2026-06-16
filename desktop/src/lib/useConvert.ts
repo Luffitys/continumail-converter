@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { parseConvertLine, appendWarningCapped, type WarningItem } from "./convert";
+import { parseConvertLine, appendWarningCapped, convertExitError, type WarningItem } from "./convert";
 import { startConvert } from "./engine";
 import type { ConversionConfig, ConvertEvent } from "./types";
 
@@ -114,15 +114,15 @@ export function useConvert() {
       const ev = parseConvertLine(e.payload);
       if (ev) setState((s) => reduce(s, ev));
     });
-    const unlistenExit = listen<number | null>("convert://exit", (e) => {
-      // Defensive: if the process ended while still running (no terminal event),
-      // treat a nonzero exit as an error. Ignore exits once not running.
+    const unlistenExit = listen<number | null>("convert://exit", async (e) => {
+      // Let a convert://line handler already queued ahead of this exit run first
+      // (line/exit are separate channels, so ordering is best-effort). If the run
+      // is still "running" at process exit, no terminal event was processed —
+      // surface an error instead of hanging on the progress screen.
+      await Promise.resolve();
       setState((s) => {
-        if (s.phase !== "running") return s;
-        if (e.payload && e.payload !== 0) {
-          return { ...s, phase: "error", errorMessage: `Conversion failed (exit code ${e.payload}).` };
-        }
-        return s;
+        const msg = convertExitError(e.payload, s.phase === "running");
+        return msg ? { ...s, phase: "error", errorMessage: msg } : s;
       });
     });
     return () => {

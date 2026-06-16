@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { describe, it, expect } from "vitest";
-import { parseConvertLine, deriveOutputTarget, appendWarningCapped } from "./convert";
+import { parseConvertLine, deriveOutputTarget, appendWarningCapped, convertExitError } from "./convert";
 import type { WarningItem } from "./convert";
 
 describe("parseConvertLine", () => {
@@ -64,5 +64,19 @@ describe("parseConvertLine (progress carries bytes)", () => {
       '{"type":"progress","converted":10,"total":20,"warnings":1,"skipped":0,"bytes":12345,"currentFolder":"Inbox"}',
     );
     expect(p).toMatchObject({ type: "progress", converted: 10, total: 20, bytes: 12345, currentFolder: "Inbox" });
+  });
+});
+
+describe("convertExitError", () => {
+  it("returns null when not running (a terminal event was already handled)", () => {
+    expect(convertExitError(0, false)).toBeNull();
+    expect(convertExitError(1, false)).toBeNull();
+  });
+  it("errors on a nonzero exit while still running", () => {
+    expect(convertExitError(2, true)).toMatch(/exit code 2/);
+  });
+  it("errors on a zero/null exit while still running (no terminal event)", () => {
+    expect(convertExitError(0, true)).toMatch(/without a terminal event/);
+    expect(convertExitError(null, true)).toMatch(/without a terminal event/);
   });
 });

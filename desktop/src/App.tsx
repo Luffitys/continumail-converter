@@ -86,9 +86,12 @@ export default function App() {
       {f.stage === "scanning" && <ScanningView fileCount={f.inputFiles.length} progress={f.scanProgress} />}
       {f.stage === "review" && f.scan && (
         <ReviewView
-          scan={f.scan}
+          sources={flow.sortedSources}
           checkedIds={f.checkedIds}
           skipEmpty={f.skipEmpty}
+          sortBy={f.sortBy}
+          sortDir={f.sortDir}
+          onSortChange={flow.setSort}
           onToggle={flow.toggleChecked}
           onSkipEmptyChange={flow.setSkipEmpty}
           onContinue={flow.continueToOptions}
@@ -98,6 +101,7 @@ export default function App() {
       {f.stage === "options" && f.scan && f.outputPath && (
         <OptionsView
           scan={f.scan}
+          previewSources={flow.sortedSources}
           outputPath={f.outputPath}
           checkedIds={f.checkedIds}
           skipEmpty={f.skipEmpty}

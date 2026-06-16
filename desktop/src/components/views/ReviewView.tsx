@@ -3,14 +3,17 @@
 
 import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { calculateReviewTotals } from "@/lib/review";
+import { calculateReviewTotals, nextSort, type SortField, type SortDir, type SortableField } from "@/lib/review";
 import { formatBytes, formatDateRange } from "@/lib/format";
-import type { ScanResult } from "@/lib/parse";
+import type { SourceRow } from "@/lib/types";
 
 interface ReviewViewProps {
-  scan: ScanResult;
+  sources: SourceRow[];
   checkedIds: Set<string>;
   skipEmpty: boolean;
+  sortBy: SortField;
+  sortDir: SortDir;
+  onSortChange: (field: SortField, dir: SortDir) => void;
   onToggle: (id: string) => void;
   onSkipEmptyChange: (v: boolean) => void;
   onContinue: () => void;
@@ -18,13 +21,23 @@ interface ReviewViewProps {
 }
 
 export function ReviewView({
-  scan, checkedIds, skipEmpty, onToggle, onSkipEmptyChange, onContinue, onBack,
+  sources, checkedIds, skipEmpty, sortBy, sortDir, onSortChange,
+  onToggle, onSkipEmptyChange, onContinue, onBack,
 }: ReviewViewProps) {
   const totals = useMemo(
-    () => calculateReviewTotals(scan.sources, checkedIds, skipEmpty),
-    [scan.sources, checkedIds, skipEmpty],
+    () => calculateReviewTotals(sources, checkedIds, skipEmpty),
+    [sources, checkedIds, skipEmpty],
   );
   const canContinue = totals.folders > 0;
+
+  const onHeaderClick = (clicked: SortableField) => {
+    const n = nextSort(sortBy, sortDir, clicked);
+    onSortChange(n.field, n.dir);
+  };
+  const arrow = (field: SortField) =>
+    sortBy === field ? <span aria-hidden="true">{sortDir === "asc" ? "▲" : "▼"}</span> : null;
+  const ariaSort = (field: SortField): "ascending" | "descending" | "none" =>
+    sortBy === field ? (sortDir === "asc" ? "ascending" : "descending") : "none";
 
   return (
     <div className="flex flex-1 flex-col min-h-0">
@@ -35,19 +48,39 @@ export function ReviewView({
         {formatDateRange(totals.dateFrom, totals.dateTo)}
       </p>
 
-      <div className="mt-4 min-h-0 flex-1 overflow-auto rounded-lg border border-border">
+      <p className="mt-2 text-xs text-light-gray">
+        Click a column header to sort. Sorting changes this view only — it doesn't affect the converted file.
+      </p>
+
+      <div className="mt-2 min-h-0 flex-1 overflow-auto rounded-lg border border-border">
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-card text-left text-xs text-light-gray">
             <tr>
               <th className="w-8 px-3 py-2"></th>
-              <th className="px-2 py-2">Folder</th>
-              <th className="px-2 py-2 text-right">Messages</th>
-              <th className="px-2 py-2">Dates</th>
-              <th className="px-3 py-2 text-right">Estimated PST size</th>
+              <th className="px-2 py-2" aria-sort={ariaSort("name")}>
+                <button type="button" className="flex items-center gap-1 hover:text-foreground" onClick={() => onHeaderClick("name")}>
+                  Folder{arrow("name")}
+                </button>
+              </th>
+              <th className="px-2 py-2 text-right" aria-sort={ariaSort("messages")}>
+                <button type="button" className="flex w-full items-center justify-end gap-1 hover:text-foreground" onClick={() => onHeaderClick("messages")}>
+                  Messages{arrow("messages")}
+                </button>
+              </th>
+              <th className="px-2 py-2" aria-sort={ariaSort("date")}>
+                <button type="button" className="flex items-center gap-1 hover:text-foreground" onClick={() => onHeaderClick("date")} title="▲ oldest first · ▼ newest first">
+                  Dates{arrow("date")}
+                </button>
+              </th>
+              <th className="px-3 py-2 text-right" aria-sort={ariaSort("size")}>
+                <button type="button" className="flex w-full items-center justify-end gap-1 hover:text-foreground" onClick={() => onHeaderClick("size")}>
+                  Estimated PST size{arrow("size")}
+                </button>
+              </th>
             </tr>
           </thead>
           <tbody>
-            {scan.sources.map((s) => {
+            {sources.map((s) => {
               const isEmpty = s.messages === 0;
               const hiddenBySkip = isEmpty && skipEmpty;
               return (

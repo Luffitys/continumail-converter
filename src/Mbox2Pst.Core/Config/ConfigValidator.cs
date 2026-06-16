@@ -46,6 +46,13 @@ public static class ConfigValidator
                 // ConversionRunnerTests.Run_MissingSourceFile_RecordsSkipInsteadOfThrowing).
                 if (string.IsNullOrWhiteSpace(source.Path))
                     throw new ConfigValidationException($"Output '{output.Name}' has a source with an empty path.");
+
+                // An explicit per-source folder override must be a safe PST folder name.
+                // The engine — not only the GUI — enforces this; CLI/hand-written configs
+                // bypass the GUI. A null TargetFolder is legal: the folder name is derived
+                // internally (mirror = filename stem; flatten = "Imported Mail").
+                if (source.TargetFolder is not null)
+                    FolderNameValidator.Validate(source.TargetFolder);
             }
         }
     }

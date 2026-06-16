@@ -67,8 +67,41 @@ public class MboxParserTests
         Assert.All(results, r => Assert.True(r.Success, r.Error));
         Assert.Equal("pakke", results[0].Message!.Subject);
         Assert.Equal("message #1", results[0].Message!.Source.Identifier);
+
+        // The trap lines must stay in message 1's body, not be treated as structure.
+        string body0 = results[0].Message!.TextBody ?? string.Empty;
+        Assert.Contains("From here on", body0);            // From-shaped body line not split
+        Assert.Contains("--not-a-real-boundary", body0);   // pseudo-boundary stayed in body
+        Assert.Contains("From escaped: originally", body0); // mboxrd >From un-escaped (#1)
+
+        // Message 2 must survive intact (not swallowed into message 1).
         Assert.Equal("second message", results[1].Message!.Subject);
         Assert.Equal("message #2", results[1].Message!.Source.Identifier);
+    }
+
+    [Fact]
+    public void MimeFormatMbox_MisparsesFixture_ProvingTheHazardWeAvoid()
+    {
+        // MimeKit's own mbox parser (MimeFormat.Mbox) is fooled by the trap content in
+        // this fixture (observed on MimeKit 4.17.0). The engine avoids it by splitting
+        // messages itself (SplitMessages) and parsing each with MimeFormat.Entity.
+        // NOTE: this proof is pinned to MimeKit 4.17.0's behavior. If a future MimeKit
+        // upgrade FIXES its mbox parser, this test will go red — that's a welcome signal,
+        // not a defect: update the assertion to the new behavior (or retire this proof).
+        string path = Path.Combine(AppContext.BaseDirectory, "fixtures", "mbox-eof-bug.mbox");
+        using var stream = File.OpenRead(path);
+        var parser = new MimeKit.MimeParser(stream, MimeKit.MimeFormat.Mbox);
+        // PIN to the EXACT observed wrong behavior: MimeFormat.Mbox parses message 1 OK
+        // (count=1, subject="pakke") but then throws FormatException on the second
+        // ParseMessage() call ("Failed to parse message headers") — the "From here on..."
+        // trap line in message 1's body caused mis-splitting that corrupts message 2's parse.
+        var subjects = new List<string?>();
+        Assert.Throws<FormatException>(() =>
+        {
+            while (!parser.IsEndOfStream) { subjects.Add(parser.ParseMessage().Subject); }
+        });
+        string subject0 = Assert.Single(subjects)!;
+        Assert.Equal("pakke", subject0);
     }
 
     [Fact]

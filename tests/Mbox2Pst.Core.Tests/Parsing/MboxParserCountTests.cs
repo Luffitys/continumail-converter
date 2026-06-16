@@ -56,10 +56,11 @@ public class MboxParserCountTests
     }
 
     [Fact]
-    public void CountMessages_FileWithNoTrailingNewline_MatchesParseCount()
+    public void CountMessages_FileWithNoTrailingNewline_Returns2()
     {
-        // An mbox where the last header line has no trailing \n — CountMessages
-        // must agree with Parse().Count() on the total.
+        // An mbox whose last header line has no trailing \n. There are exactly TWO
+        // messages — assert that literal, not CountMessages()==Parse().Count() (two
+        // values from the same boundary rule, which a shared bug like #0 would pass).
         string content =
             "From alice@example.com Mon Jan  1 00:00:00 2024\r\n" +
             "Subject: Test\r\n" +
@@ -76,9 +77,8 @@ public class MboxParserCountTests
         {
             File.WriteAllText(path, content, System.Text.Encoding.ASCII);
             var parser = new MboxParser();
-            int countResult = parser.CountMessages(path);
-            int parseResult = parser.Parse(path).Count();
-            Assert.Equal(parseResult, countResult);
+            Assert.Equal(2, parser.CountMessages(path));
+            Assert.Equal(2, parser.Parse(path).Count());
         }
         finally { File.Delete(path); }
     }

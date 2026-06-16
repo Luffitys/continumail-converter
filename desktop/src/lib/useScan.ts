@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Aksel Visby (ContinuMail)
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { scan as runScan } from "./engine";
 import { defaultOptions, type OptionsState, FLATTEN_SOURCE_ID } from "./options";
-import type { FileStat } from "./types";
+import { sortSources, type SortField, type SortDir } from "./review";
+import type { FileStat, SourceRow } from "./types";
 import type { ScanResult } from "./parse";
 
 export type FlowStage = "select" | "scanning" | "review" | "options" | "scanError";
@@ -19,6 +20,8 @@ export interface PreConvertState {
   skipEmpty: boolean;
   options: OptionsState;
   scanProgress: { bytes: number; totalBytes: number } | null;
+  sortBy: SortField;
+  sortDir: SortDir;
 }
 
 function initialState(): PreConvertState {
@@ -32,6 +35,8 @@ function initialState(): PreConvertState {
     skipEmpty: true,
     options: defaultOptions(),
     scanProgress: null,
+    sortBy: "default",
+    sortDir: "desc",
   };
 }
 
@@ -69,6 +74,8 @@ export function useScan() {
         skipEmpty: true,
         options: defaultOptions(),
         scanProgress: null,
+        sortBy: "default",
+        sortDir: "desc",
       }));
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : String(e);
@@ -87,6 +94,11 @@ export function useScan() {
 
   const setSkipEmpty = useCallback(
     (skipEmpty: boolean) => setState((s) => ({ ...s, skipEmpty })),
+    [],
+  );
+
+  const setSort = useCallback(
+    (sortBy: SortField, sortDir: SortDir) => setState((s) => ({ ...s, sortBy, sortDir })),
     [],
   );
 
@@ -115,6 +127,11 @@ export function useScan() {
   );
   const resetFlow = useCallback(() => setState(initialState()), []);
 
+  const sortedSources: SourceRow[] = useMemo(
+    () => (state.scan ? sortSources(state.scan.sources, state.sortBy, state.sortDir) : []),
+    [state.scan, state.sortBy, state.sortDir],
+  );
+
   return {
     state,
     setInputFiles,
@@ -122,6 +139,8 @@ export function useScan() {
     continueToScan,
     toggleChecked,
     setSkipEmpty,
+    setSort,
+    sortedSources,
     setOptions,
     setRename,
     continueToOptions,

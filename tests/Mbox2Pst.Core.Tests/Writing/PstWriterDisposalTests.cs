@@ -73,8 +73,9 @@ public class PstWriterDisposalTests
         string tempAttachPath = Path.GetTempFileName();
         File.WriteAllBytes(tempAttachPath, [1, 2, 3]);
 
-        // Pre-dispose the second attachment so ReadAllBytes() throws ObjectDisposedException,
-        // which propagates out of WriteMessage and is caught by the outer try/catch in WritePlan.
+        // Pre-dispose the second attachment so ReadAllBytes() throws ObjectDisposedException
+        // during WriteMessage. Under the fatal-by-default write taxonomy (empty recoverable
+        // allowlist) this is NOT a recoverable per-message skip — it propagates as fatal.
         var badContent = AttachmentContent.FromBytes([4, 5, 6]);
         badContent.Dispose();
 
@@ -97,7 +98,7 @@ public class PstWriterDisposalTests
                     {
                         FileName = "bad.bin",
                         MimeType = "application/octet-stream",
-                        Content = badContent, // ReadAllBytes() throws -> WriteMessage throws
+                        Content = badContent, // ReadAllBytes() throws -> WriteMessage throws -> fatal
                     },
                 ],
             };
@@ -109,15 +110,13 @@ public class PstWriterDisposalTests
 
             var report = new ConversionReport();
             var writer = new PstWriter(TemplatePath);
-            writer.WritePlan(plan, messages, outputDir, report);
 
-            // Message failed to write -> skipped, not converted.
-            Assert.Equal(0, report.ConvertedCount);
-            Assert.Single(report.Skipped);
+            // The write failure now propagates as fatal (no silent skip)...
+            Assert.ThrowsAny<Exception>(() => writer.WritePlan(plan, messages, outputDir, report));
 
-            // Even though WriteMessage threw, the finally block must have disposed the temp file.
+            // ...but the per-message finally must still dispose the attachment temp file (no leak).
             Assert.False(File.Exists(tempAttachPath),
-                "Temp attachment file should be deleted even when WritePlan fails on the message");
+                "Temp attachment file should be deleted even when the message write fails");
         }
         finally
         {

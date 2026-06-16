@@ -49,6 +49,17 @@ export function appendWarningCapped(list: WarningItem[], w: WarningItem, cap = 2
   return [...list, w];
 }
 
+/** Decide how a `convert://exit` should affect a still-running UI. Returns an
+ * error message when the process exited while no terminal event had been
+ * processed — a nonzero exit, or a zero/null exit with no done/cancelled (which
+ * would otherwise hang the progress screen) — or null when no transition is
+ * needed (a terminal event already moved the UI out of "running"). */
+export function convertExitError(exitCode: number | null, isRunning: boolean): string | null {
+  if (!isRunning) return null;
+  if (exitCode && exitCode !== 0) return `Conversion failed (exit code ${exitCode}).`;
+  return "Conversion ended without a terminal event.";
+}
+
 /** Parse one JSON-Lines stdout line into a typed ConvertEvent, or null for
  * blank / non-JSON / unrecognized-type lines (e.g. dev build noise). */
 export function parseConvertLine(line: string): ConvertEvent | null {

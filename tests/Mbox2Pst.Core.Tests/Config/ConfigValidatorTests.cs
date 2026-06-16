@@ -85,4 +85,28 @@ public class ConfigValidatorTests
         config.Outputs[0].Name = "../escape";
         Assert.Throws<ConfigValidationException>(() => ConfigValidator.Validate(config));
     }
+
+    [Fact]
+    public void Validate_InvalidTargetFolder_Throws()
+    {
+        var config = ValidConfig();
+        config.Outputs[0].Sources[0].TargetFolder = "bad/name";
+        Assert.Throws<ConfigValidationException>(() => ConfigValidator.Validate(config));
+    }
+
+    [Fact]
+    public void Validate_NullTargetFolder_DoesNotThrow()
+    {
+        var config = ValidConfig();
+        config.Outputs[0].Sources[0].TargetFolder = null;
+        ConfigValidator.Validate(config); // must not throw
+    }
+
+    [Fact]
+    public void Validate_ValidTargetFolder_DoesNotThrow()
+    {
+        var config = ValidConfig();
+        config.Outputs[0].Sources[0].TargetFolder = "Work Mail";
+        ConfigValidator.Validate(config); // must not throw
+    }
 }

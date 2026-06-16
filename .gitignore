@@ -2,9 +2,7 @@ bin/
 obj/
 *.user
 test_output.pst
-docs/
 .worktrees/
-CLAUDE.md
 bench-output/
 takeout-bench.json
 testdata/
@@ -16,8 +14,9 @@ fixtures/takeout-test-config.json
 # Visual-companion brainstorm artifacts (local only)
 .superpowers/
 
-# Session handoff notes (local-only)
-SESSION-HANDOFF.md
+# Root session-handoff scratch note (local-only). Anchored to root so the tracked,
+# export-ignored docs/SESSION-HANDOFF.md is NOT caught by this pattern.
+/SESSION-HANDOFF.md
 
 # Local manual-test output (PSTs / reports) — never commit
 _manualtest/

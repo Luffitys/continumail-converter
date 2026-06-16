@@ -19,6 +19,22 @@ struct ConvertState(Mutex<Option<CommandChild>>);
 #[derive(Default)]
 struct ScanState(Mutex<Option<CommandChild>>);
 
+// Drain every complete (newline-terminated) line from `buf`, returning each with
+// trailing CR/LF stripped and empty lines skipped. Any trailing partial line is
+// left in `buf` for the next chunk. Used by both the scan and convert readers so
+// a JSON record that spans or batches across Stdout events is never dropped.
+fn drain_lines(buf: &mut String) -> Vec<String> {
+    let mut out = Vec::new();
+    while let Some(nl) = buf.find('\n') {
+        let line: String = buf.drain(..=nl).collect();
+        let line = line.trim_end_matches(|c| c == '\r' || c == '\n').to_string();
+        if !line.is_empty() {
+            out.push(line);
+        }
+    }
+    out
+}
+
 async fn run_sidecar(app: &tauri::AppHandle, args: Vec<String>) -> Result<String, String> {
     let output = app
         .shell()
@@ -137,12 +153,8 @@ async fn start_scan(
             match event {
                 CommandEvent::Stdout(bytes) => {
                     buf.push_str(&String::from_utf8_lossy(&bytes));
-                    while let Some(nl) = buf.find('\n') {
-                        let line: String = buf.drain(..=nl).collect();
-                        let line = line.trim_end_matches(|c| c == '\r' || c == '\n').to_string();
-                        if !line.is_empty() {
-                            let _ = app_for_task.emit("scan://line", line);
-                        }
+                    for line in drain_lines(&mut buf) {
+                        let _ = app_for_task.emit("scan://line", line);
                     }
                 }
                 CommandEvent::Stderr(bytes) => {
@@ -223,17 +235,30 @@ async fn start_convert(
 
     let app_for_task = app.clone();
     tauri::async_runtime::spawn(async move {
+        // Buffer stdout and split on newlines — do NOT assume each Stdout event is
+        // exactly one JSON line (a record may span events or arrive batched).
+        let mut buf = String::new();
+        let mut terminated = false;
         while let Some(event) = rx.recv().await {
             match event {
                 CommandEvent::Stdout(bytes) => {
-                    let line = String::from_utf8_lossy(&bytes).to_string();
-                    let _ = app_for_task.emit("convert://line", line);
+                    buf.push_str(&String::from_utf8_lossy(&bytes));
+                    for line in drain_lines(&mut buf) {
+                        let _ = app_for_task.emit("convert://line", line);
+                    }
                 }
                 CommandEvent::Stderr(bytes) => {
                     let line = String::from_utf8_lossy(&bytes).to_string();
                     let _ = app_for_task.emit("convert://stderr", line);
                 }
                 CommandEvent::Terminated(payload) => {
+                    terminated = true;
+                    // Flush any trailing partial line (no terminating newline).
+                    let rest = buf.trim_end_matches(|c| c == '\r' || c == '\n').to_string();
+                    if !rest.is_empty() {
+                        let _ = app_for_task.emit("convert://line", rest);
+                    }
+                    buf.clear();
                     *app_for_task.state::<ConvertState>().0.lock().unwrap() = None;
                     let _ = std::fs::remove_file(&config_path);
                     let _ = app_for_task.emit("convert://exit", payload.code);
@@ -241,11 +266,18 @@ async fn start_convert(
                 _ => {}
             }
         }
-        // Defensive: ensure the slot + temp file are cleared even if the stream
-        // ended without a Terminated event (both ops are idempotent/harmless if
-        // the Terminated arm already ran).
-        *app_for_task.state::<ConvertState>().0.lock().unwrap() = None;
-        let _ = std::fs::remove_file(&config_path);
+        // Defensive: if the stream ended WITHOUT a Terminated event, flush any
+        // partial line, clear the slot + temp file, and emit a synthetic failure
+        // so the frontend can't hang forever.
+        if !terminated {
+            let rest = buf.trim_end_matches(|c| c == '\r' || c == '\n').to_string();
+            if !rest.is_empty() {
+                let _ = app_for_task.emit("convert://line", rest);
+            }
+            *app_for_task.state::<ConvertState>().0.lock().unwrap() = None;
+            let _ = std::fs::remove_file(&config_path);
+            let _ = app_for_task.emit("convert://exit", -1_i32);
+        }
     });
 
     Ok(())
@@ -292,4 +324,34 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::drain_lines;
+
+    #[test]
+    fn drain_lines_splits_batched_records_and_keeps_partial() {
+        // Two complete records arrive batched in one chunk, plus a partial third
+        // with no terminating newline.
+        let mut buf = String::from("{\"type\":\"started\"}\n{\"type\":\"progress\"}\n{\"type\":\"do");
+        let lines = drain_lines(&mut buf);
+        assert_eq!(lines, vec!["{\"type\":\"started\"}", "{\"type\":\"progress\"}"]);
+        // The incomplete record is left in the buffer for the next chunk.
+        assert_eq!(buf, "{\"type\":\"do");
+
+        // The rest of the record arrives; now it drains as one complete line.
+        buf.push_str("ne\"}\n");
+        let lines = drain_lines(&mut buf);
+        assert_eq!(lines, vec!["{\"type\":\"done\"}"]);
+        assert_eq!(buf, "");
+    }
+
+    #[test]
+    fn drain_lines_strips_crlf_and_skips_empty_lines() {
+        let mut buf = String::from("a\r\n\r\nb\n");
+        let lines = drain_lines(&mut buf);
+        assert_eq!(lines, vec!["a", "b"]);
+        assert_eq!(buf, "");
+    }
 }

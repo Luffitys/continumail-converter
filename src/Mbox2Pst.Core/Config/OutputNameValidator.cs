@@ -4,7 +4,6 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
-using System.IO;
 
 namespace Mbox2Pst.Core.Config;
 
@@ -17,6 +16,13 @@ namespace Mbox2Pst.Core.Config;
 /// </summary>
 public static class OutputNameValidator
 {
+    // Explicit Windows invalid file-name characters. Hardcoded (not
+    // Path.GetInvalidFileNameChars(), which is OS-specific — Linux returns only
+    // '\0' and '/') because output PSTs are Windows/Outlook artifacts, so the
+    // policy must be the Windows one regardless of the build/CI OS.
+    private static readonly char[] InvalidNameChars =
+        { '<', '>', ':', '"', '/', '\\', '|', '?', '*' };
+
     private static readonly HashSet<string> ReservedNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "CON", "PRN", "AUX", "NUL",
@@ -32,9 +38,16 @@ public static class OutputNameValidator
         if (name is "." or "..")
             throw new ConfigValidationException($"Output name '{name}' is not a valid file name.");
 
-        if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        if (name.IndexOfAny(InvalidNameChars) >= 0)
             throw new ConfigValidationException(
                 $"Output name '{name}' contains an invalid character (path separators, ':', '*', '?', etc. are not allowed).");
+
+        foreach (char ch in name)
+        {
+            if (ch < 0x20)
+                throw new ConfigValidationException(
+                    $"Output name '{name}' contains a control character.");
+        }
 
         if (ReservedNames.Contains(name))
             throw new ConfigValidationException($"Output name '{name}' is a reserved device name.");

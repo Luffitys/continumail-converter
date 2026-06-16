@@ -12,7 +12,7 @@ libraries installed.
 Part of **ContinuMail** — a family of practical, honest mail tools.
 
 > **Status: early release (0.x).** The desktop app and the conversion engine are
-> feature-complete and covered by tests (191 engine + 72 app tests). It has been
+> covered by a comprehensive automated test suite (engine + desktop unit tests). It has been
 > validated on real Gmail Takeout and Thunderbird/Exchange exports. As an early
 > release, please keep backups and validate output before relying on it.
 
@@ -68,9 +68,9 @@ the messy, real-world archives I kept running into, and puts it in anyone's hand
   can keep working while it runs.
 - **Private / local-first.** No archive upload; makes no network connections.
   Your email stays on your machine.
-- **Gmail Takeout–aware.** Built and tested against real Google Takeout exports,
+- **Gmail Takeout–aware.** Built and validated against real Google Takeout exports,
   including their quirks (and a MimeKit mbox-parsing bug that truncates some
-  archives).
+  archives, which this converter works around).
 - **Faithful.** Preserves folder structure, attachments (including inline images
   and embedded `.eml` messages), HTML bodies, dates, sender, To/Cc/Bcc,
   read/unread state, importance, and threading headers.
@@ -101,7 +101,7 @@ Your originals are never modified — the tool only reads them.
   they don't show a phantom paperclip), and embedded `.eml` messages.
 - Metadata fidelity: To/Cc/Bcc recipient types, read/unread, importance/priority,
   Message-ID / In-Reply-To / References, conversation topic.
-- Large-attachment spill-to-disk (≥ 4 MB) to avoid running out of memory.
+- Large attachments (≥ 4 MB) spill to a temp file so many of them don't pile up in memory at once.
 - Conversion reports (human-readable + JSON) listing skipped messages and warnings.
 - Empty source folders become empty PST folders (optional).
 
@@ -245,7 +245,7 @@ kind** (see [`LICENSE`](LICENSE)). Email history is important — please:
 You remain responsible for backups, testing, and validation before relying on
 converted data.
 
-**Unsigned installer.** This 0.1.0 release is **not yet code-signed**, so when you run
+**Unsigned installer.** This release is **not yet code-signed**, so when you run
 the installer Windows SmartScreen may warn that the publisher is "unknown." This is
 expected for an early open-source release — see [Download & install](#download--install)
 for how to proceed. Code signing is on the roadmap.
@@ -326,8 +326,3 @@ Key things to know when working on the code:
 - `assets/template.pst` — blank Unicode PST used as the write seed.
 - `tools/template-gen/` — one-time, dev-only Outlook-COM tool to regenerate the template
   (not part of the shipped app).
-
-## Known issues
-
-- A `NU1902` build warning for MimeKit 4.9.0 (`GHSA-g7hc-96xr-gvvx`, moderate) is
-  expected; a MimeKit upgrade is planned.

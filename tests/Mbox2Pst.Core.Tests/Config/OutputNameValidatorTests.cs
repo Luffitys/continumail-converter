@@ -38,4 +38,21 @@ public class OutputNameValidatorTests
     {
         Assert.ThrowsAny<System.Exception>(() => OutputNameValidator.Validate(name));
     }
+
+    [Theory]
+    [InlineData('<')]
+    [InlineData('>')]
+    [InlineData(':')]
+    [InlineData('"')]
+    [InlineData('/')]
+    [InlineData('\\')]
+    [InlineData('|')]
+    [InlineData('?')]
+    [InlineData('*')]
+    [InlineData('\t')]   // a control char (0x09)
+    [InlineData('\0')]   // null — also a control char (0x00)
+    public void Validate_WindowsInvalidCharacter_Throws(char invalid)
+    {
+        Assert.ThrowsAny<System.Exception>(() => OutputNameValidator.Validate($"a{invalid}b"));
+    }
 }
