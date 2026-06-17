@@ -2,14 +2,14 @@ name: CI
 
 # CI (right-sized, advisory): build + test the engine on Windows (engine uses Windows-only PST
 # APIs) and run the desktop frontend unit tests (Vitest). Both jobs run on windows-latest — the
-# only supported platform — for every push and PR to master. See docs/repo-health-roadmap.md §3.
-# Remaining optional add-on: a hygiene grep step.
+# only supported platform — for every push and PR to master (private repo) and main (public repo).
+# See docs/repo-health-roadmap.md §3. Remaining optional add-on: a hygiene grep step.
 
 on:
   push:
-    branches: [master]
+    branches: [master, main]
   pull_request:
-    branches: [master]
+    branches: [master, main]
 
 # Avoid piling up redundant runs on rapid pushes to the same ref.
 concurrency:
