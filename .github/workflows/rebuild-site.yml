@@ -1,0 +1,21 @@
+name: Rebuild website on release
+
+# When a release is published, trigger a Vercel rebuild of continumail-web so the
+# build-time release fetch (download button + /releases page) picks up the new version.
+on:
+  release:
+    types: [published]
+
+jobs:
+  rebuild-site:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Vercel deploy hook
+        env:
+          HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::error::VERCEL_DEPLOY_HOOK secret is not set (Settings -> Secrets -> Actions)"; exit 1
+          fi
+          curl -fsSL -X POST "$HOOK"
+          echo "Triggered continumail-web rebuild."
