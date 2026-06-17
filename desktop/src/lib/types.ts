@@ -44,7 +44,9 @@ export interface FileStat {
   size: number;
 }
 
-export type ConvertEvent =
+export type Versioned = { schemaVersion?: number };
+
+export type ConvertEvent = (
   | { type: "started"; input?: string; outputDirectory?: string }
   | { type: "scan"; totalMessages: number }
   | {
@@ -77,4 +79,5 @@ export type ConvertEvent =
       skipped: number;
       warnings: number;
       elapsedMs?: number;
-    };
+    }
+) & Versioned;

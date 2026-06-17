@@ -4,6 +4,56 @@ All notable changes to ContinuMail Converter are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] — 2026-06-18
+
+A feature + hardening release. The headline is **Thunderbird subfolder (`.sbd`) support** — a new
+CLI `discover` command that reconstructs a nested folder tree from a Thunderbird mail directory and
+converts it to nested PST folders. **This is currently CLI-only; the desktop app does not yet expose
+it.** The rest of the release is correctness, security, and robustness work that benefits everyone,
+desktop users included.
+
+### Added
+- **Thunderbird `.sbd` nested-folder support (CLI).** A new `discover` command walks a mail-files
+  directory (e.g. a Thunderbird "Local Folders" or account directory), reconstructs the nested tree
+  from Thunderbird's `<name>` + sibling `<name>.sbd/` layout, and emits a JSON source list with an
+  explicit nested `targetFolderPath` per source. Feeding that into `convert` produces a PST with the
+  folder hierarchy preserved. A plain directory of `.mbox` files still works as before.
+- **Nested folder paths in config.** `convert` sources accept a `targetFolderPath` array (e.g.
+  `["Inbox","Archive","2026"]`) to place mail into nested PST folders; the engine creates the full
+  path on demand. The existing `targetFolder` string remains single-segment shorthand.
+- **`schemaVersion` on every CLI JSON event** so consumers can detect contract changes; the desktop
+  app checks it permissively.
+
+### Changed
+- **CLI project/binary renamed `mbox2pst` → `mail2pst`** (sidecar `mail2pst-cli`). The product name
+  (ContinuMail Converter) is unchanged; this only affects anyone invoking the CLI by its old name.
+- **PST size-splitting is now predictive** — a part splits *before* a message would cross the cap,
+  rather than only at a periodic checkpoint (which could overshoot a small custom cap).
+- **Desktop app now uses a restrictive, local-only Content-Security-Policy** (previously unset).
+
+### Fixed
+- **NDR/bounce phantom attachment (KB-001).** Bounce notifications no longer surface a phantom
+  embedded-message attachment in Outlook, regardless of how deeply the `multipart/report` is nested.
+- **Stricter, cross-platform output-name validation** — reserved names, trailing space/period, and
+  platform-invalid characters are rejected up front (#17).
+- **Envelope-postmark validation** — the `From ` boundary validates the day-of-week and month, so a
+  body line that merely looks like a postmark can't cause a mis-split (#2).
+- **More accurate (component-aware) split-cap size estimate**, so very large messages split correctly (#4).
+- A permission-denied source is **skipped and reported** instead of crashing the run; an empty sender
+  address no longer fails a write; a config/output-dir setup failure emits a fatal JSON error instead
+  of a bare crash; the mbox parse enumerator is disposed promptly on early exit.
+
+### Known limitations
+- **Thunderbird read/unread & starred state is not preserved.** Thunderbird stores per-message flag
+  state in its `.msf` index, not the mbox, so an mbox-based conversion cannot recover it (messages
+  generally import as read & unflagged). Read/unread *is* preserved for archives whose mbox carries
+  real `X-Mozilla-Status` flags. (KB-002.)
+
+### Internal
+- New format-agnostic **round-trip integration test harness** (parse → write → PST read-back →
+  compare), **CI** on every push/PR, and **Dependabot**. The PST writer and MIME mapping were
+  decomposed for maintainability. No behaviour change.
+
 ## [0.1.1] — 2026-06-16
 
 A post-launch correctness and robustness release. The headline is a **data-loss fix**:

@@ -1,0 +1,95 @@
+// SPDX-FileCopyrightText: 2026 Aksel Visby (ContinuMail)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.Json;
+using Xunit;
+
+namespace Mail2Pst.Core.Tests.Cli;
+
+// Spawns the real built CLI to exercise the `discover` command wiring end-to-end
+// (argument parsing, the Directory.Exists guard, the JSON projection, CliEventSerializer).
+// Mirrors the spawn pattern in CliSchemaVersionE2ETests; the test project already builds the CLI.
+public class DiscoverCommandE2ETests
+{
+    private static string RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Mail2Pst.sln")))
+            dir = dir.Parent;
+        return dir?.FullName ?? throw new InvalidOperationException("Could not locate repo root (Mail2Pst.sln).");
+    }
+
+    private static string CliDllPath()
+    {
+        string config = AppContext.BaseDirectory.Replace('\\', '/').Contains("/bin/Release/") ? "Release" : "Debug";
+        string dll = Path.Combine(RepoRoot(), "src", "Mail2Pst.Cli", "bin", config, "net8.0", "Mail2Pst.Cli.dll");
+        Assert.True(File.Exists(dll), $"CLI build output not found at {dll}");
+        return dll;
+    }
+
+    private static (int exitCode, string stdout, string stderr) RunCli(string args)
+    {
+        var psi = new ProcessStartInfo("dotnet", $"\"{CliDllPath()}\" {args}")
+        {
+            RedirectStandardOutput = true, RedirectStandardError = true,
+            UseShellExecute = false, WorkingDirectory = RepoRoot(),
+        };
+        using Process proc = Process.Start(psi)!;
+        string stdout = proc.StandardOutput.ReadToEnd();
+        string stderr = proc.StandardError.ReadToEnd();   // kept for failure diagnostics
+        proc.WaitForExit(60_000);
+        return (proc.ExitCode, stdout, stderr);
+    }
+
+    private static void WriteMbox(string path)
+        => File.WriteAllText(path, "From a@b Mon Jan  1 00:00:00 2020\r\n\r\nx\r\n", new UTF8Encoding(false));
+
+    [Fact]
+    public void Discover_NestedTree_EmitsSourcesWithSchemaVersion()
+    {
+        string tree = Path.Combine(Path.GetTempPath(), "m2p-disccli-" + Guid.NewGuid());
+        Directory.CreateDirectory(Path.Combine(tree, "Inbox.sbd"));
+        try
+        {
+            WriteMbox(Path.Combine(tree, "Inbox"));
+            WriteMbox(Path.Combine(tree, "Inbox.sbd", "Acme"));
+
+            (int exit, string stdout, string stderr) = RunCli($"discover --input \"{tree}\"");
+            Assert.True(exit == 0, $"expected exit 0, got {exit}. stderr: {stderr}");
+
+            using JsonDocument doc = JsonDocument.Parse(stdout);
+            JsonElement root = doc.RootElement;
+            Assert.Equal("discovery", root.GetProperty("type").GetString());
+            Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+            Assert.Equal("thunderbird", root.GetProperty("layout").GetString());
+
+            JsonElement sources = root.GetProperty("sources");
+            Assert.Equal(2, sources.GetArrayLength());
+            JsonElement acme = sources.EnumerateArray()
+                .First(s => s.GetProperty("displayName").GetString() == "Acme");
+            Assert.Equal("mbox", acme.GetProperty("type").GetString());
+            string[] seg = acme.GetProperty("targetFolderPath").EnumerateArray().Select(e => e.GetString()!).ToArray();
+            Assert.Equal(new[] { "Inbox", "Acme" }, seg);
+        }
+        finally { Directory.Delete(tree, true); }
+    }
+
+    [Fact]
+    public void Discover_MissingInputDir_EmitsFatalJsonError_Exit1()
+    {
+        string missing = Path.Combine(Path.GetTempPath(), "m2p-nope-" + Guid.NewGuid());
+        (int exit, string stdout, string stderr) = RunCli($"discover --input \"{missing}\"");
+        Assert.True(exit == 1, $"expected exit 1, got {exit}. stderr: {stderr}");
+        using JsonDocument doc = JsonDocument.Parse(stdout.Trim());
+        JsonElement root = doc.RootElement;
+        Assert.Equal("error", root.GetProperty("type").GetString());
+        Assert.Equal("discover", root.GetProperty("stage").GetString());
+        Assert.True(root.GetProperty("fatal").GetBoolean());
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+    }
+}

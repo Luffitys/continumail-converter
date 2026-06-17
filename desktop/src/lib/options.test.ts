@@ -246,8 +246,8 @@ describe("source order propagation (guardrails)", () => {
 
 describe("validateFolderName parity table (mirror of FolderNameValidatorTests.cs)", () => {
   // Keep these two arrays identical (case-for-case) to the C# parity table in
-  // tests/Mbox2Pst.Core.Tests/Config/FolderNameValidatorTests.cs. The engine validator
-  // (src/Mbox2Pst.Core/Config/FolderNameValidator.cs) must agree on every case.
+  // tests/Mail2Pst.Core.Tests/Config/FolderNameValidatorTests.cs. The engine validator
+  // (src/Mail2Pst.Core/Config/FolderNameValidator.cs) must agree on every case.
   const valid = ["Imported Mail", "Work", "2024 Archive", "a.b", "Folder.name.with.dots", "café"];
   const invalid = ["", "   ", "a/b", "a\\b", "tab\there", " leading", "trailing ", ".hidden", "trailing.", "CON", "con.txt", "COM1", "LPT9.log"];
 

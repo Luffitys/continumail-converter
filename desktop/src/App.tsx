@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Aksel Visby (ContinuMail)
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Shell } from "@/components/Shell";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { SelectView } from "@/components/views/SelectView";
@@ -37,6 +37,14 @@ export default function App() {
   const flow = useScan();
   const { state: f } = flow;
   const [confirmSource, setConfirmSource] = useState(false);
+
+  // Memoized so ConfirmDialog's Esc-key effect (deps on onCancel) doesn't
+  // re-register its keydown listener on every App render.
+  const dismissConfirm = useCallback(() => setConfirmSource(false), []);
+  const confirmGoToSource = useCallback(() => {
+    setConfirmSource(false);
+    flow.back();
+  }, [flow]);
 
   if (conv.phase !== "idle") {
     const onConvertAnother = () => {
@@ -122,11 +130,8 @@ export default function App() {
       message="Going back to Source will discard this scan — you'll have to rescan the mbox files."
       confirmLabel="Go back"
       cancelLabel="Stay"
-      onConfirm={() => {
-        setConfirmSource(false);
-        flow.back();
-      }}
-      onCancel={() => setConfirmSource(false)}
+      onConfirm={confirmGoToSource}
+      onCancel={dismissConfirm}
     />
     </>
   );

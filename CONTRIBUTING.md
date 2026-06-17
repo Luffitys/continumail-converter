@@ -52,7 +52,7 @@ Contributors who prefer may instead complete and return the signed signature blo
 - Discuss non-trivial changes in an issue first.
 - Keep pull requests focused; one logical change per PR.
 - Follow the existing code style and add tests where the project has them
-  (`dotnet test mbox2pst.sln` for the engine, `cd desktop && npm test` for the GUI).
+  (`dotnet test Mail2Pst.sln` for the engine, `cd desktop && npm test` for the GUI).
 - Do not add dependencies under licenses incompatible with GPL-3.0.
 
 ## Trademarks

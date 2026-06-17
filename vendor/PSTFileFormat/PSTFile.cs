@@ -13,7 +13,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using Utilities;
 
-[assembly: InternalsVisibleTo("Mbox2Pst.Core.Tests")]
+[assembly: InternalsVisibleTo("Mail2Pst.Core.Tests")]
 
 namespace PSTFileFormat
 {

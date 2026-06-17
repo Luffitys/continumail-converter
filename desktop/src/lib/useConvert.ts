@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { parseConvertLine, appendWarningCapped, convertExitError, type WarningItem } from "./convert";
 import { startConvert } from "./engine";
+import { checkSchemaVersion } from "./schema";
 import type { ConversionConfig, ConvertEvent } from "./types";
 
 export type ConvertPhase = "idle" | "running" | "done" | "error" | "cancelled";
@@ -108,11 +109,18 @@ export function useConvert() {
   const [state, setState] = useState<ConvertState>(initial);
   const phaseRef = useRef<ConvertPhase>("idle");
   phaseRef.current = state.phase;
+  const schemaWarnedRef = useRef(false);
 
   useEffect(() => {
     const unlistenLine = listen<string>("convert://line", (e) => {
       const ev = parseConvertLine(e.payload);
-      if (ev) setState((s) => reduce(s, ev));
+      if (!ev) return;
+      if (!schemaWarnedRef.current) {
+        schemaWarnedRef.current = true;
+        const msg = checkSchemaVersion(ev.schemaVersion);
+        if (msg) console.warn(`[mail2pst] ${msg}`);
+      }
+      setState((s) => reduce(s, ev));
     });
     const unlistenExit = listen<number | null>("convert://exit", async (e) => {
       // Let a convert://line handler already queued ahead of this exit run first
@@ -132,6 +140,7 @@ export function useConvert() {
   }, []);
 
   const start = useCallback(async (config: ConversionConfig, outputDir: string) => {
+    schemaWarnedRef.current = false;
     setState({ ...initial, phase: "running", outputDir, startedAtMs: Date.now() });
     try {
       await startConvert(config, outputDir);

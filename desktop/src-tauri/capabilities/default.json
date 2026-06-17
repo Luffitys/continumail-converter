@@ -11,7 +11,7 @@
     {
       "identifier": "shell:allow-execute",
       "allow": [
-        { "name": "binaries/mbox2pst-cli", "sidecar": true, "args": true }
+        { "name": "binaries/mail2pst-cli", "sidecar": true, "args": true }
       ]
     }
   ]

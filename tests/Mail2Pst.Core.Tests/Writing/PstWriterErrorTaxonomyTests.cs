@@ -1,0 +1,133 @@
+// SPDX-FileCopyrightText: 2026 Aksel Visby (ContinuMail)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using Mail2Pst.Core.Mapping;
+using Mail2Pst.Core.Models;
+using Mail2Pst.Core.Reporting;
+using Mail2Pst.Core.Writing;
+using PSTFileFormat;
+using Xunit;
+
+namespace Mail2Pst.Core.Tests.Writing;
+
+public class PstWriterErrorTaxonomyTests
+{
+    // The write-side recoverable allowlist is intentionally EMPTY for v1: a PST writer
+    // failure is fatal unless proven to be one bad message. This pins that decision.
+    [Theory]
+    [InlineData(typeof(InvalidOperationException))]
+    [InlineData(typeof(NullReferenceException))]
+    [InlineData(typeof(ArgumentException))]
+    [InlineData(typeof(IOException))]
+    [InlineData(typeof(FormatException))]
+    [InlineData(typeof(System.Text.EncoderFallbackException))]
+    public void IsRecoverableWriteError_IsFalse_ForAllRepresentativeExceptions(Type exceptionType)
+    {
+        var ex = (Exception)Activator.CreateInstance(exceptionType)!;
+        Assert.False(PstWriter.IsRecoverableWriteError(ex));
+    }
+
+    private static string TemplatePath => Path.Combine(AppContext.BaseDirectory, "assets", "template.pst");
+
+    private static PlannedMessage SmallMessage(int i) => new()
+    {
+        TargetFolderPath = new[] { "Imported Mail" },
+        Message = new MailMessage
+        {
+            Subject = $"Message {i}",
+            TextBody = "body",
+            Source = new SourceReference { SourcePath = "Archive.mbox", Identifier = $"#{i}" },
+            Attachments = new List<MailAttachment>(),
+        },
+    };
+
+    // Overrides the per-message write seam to throw a chosen exception when `shouldThrow`
+    // returns true (called once per message with the 0-based write index).
+    private sealed class ThrowingPstWriter : PstWriter
+    {
+        private readonly Func<int, bool> _shouldThrow;
+        private readonly Exception _toThrow;
+        private int _calls;
+
+        public ThrowingPstWriter(string templatePath, Func<int, bool> shouldThrow, Exception toThrow, int checkIntervalMessages = 500)
+            : base(templatePath, checkIntervalMessages)
+        {
+            _shouldThrow = shouldThrow;
+            _toThrow = toThrow;
+        }
+
+        internal override void WriteMessageCore(PSTFile file, PSTFolder folder, MailMessage message)
+        {
+            if (_shouldThrow(_calls++)) throw _toThrow;
+            base.WriteMessageCore(file, folder, message);
+        }
+    }
+
+    [Fact]
+    public void WritePlan_FatalWriteError_DeletesInProgressPartAndRethrows()
+    {
+        string outputDir = Path.Combine(Path.GetTempPath(), "mail2pst-tests-" + Guid.NewGuid());
+        Directory.CreateDirectory(outputDir);
+        try
+        {
+            var plan = new PstOutputPlan { Name = "Personal", MaxSizeBytes = 100L * 1024 * 1024 };
+            var messages = Enumerable.Range(0, 5).Select(SmallMessage).ToList();
+            var report = new ConversionReport();
+            var writer = new ThrowingPstWriter(TemplatePath, i => i == 2, new InvalidOperationException("boom"));
+
+            Assert.Throws<InvalidOperationException>(() =>
+                writer.WritePlan(plan, messages, outputDir, report));
+
+            // No split happened; the single in-progress part must be deleted.
+            Assert.Empty(Directory.GetFiles(outputDir, "*.pst"));
+        }
+        finally { Directory.Delete(outputDir, true); }
+    }
+
+    [Fact]
+    public void WritePlan_FatalAfterSplit_KeepsCompletedPartDeletesCurrent()
+    {
+        long templateSize = new FileInfo(TemplatePath).Length;
+        string outputDir = Path.Combine(Path.GetTempPath(), "mail2pst-tests-" + Guid.NewGuid());
+        Directory.CreateDirectory(outputDir);
+        try
+        {
+            var plan = new PstOutputPlan { Name = "Archive", MaxSizeBytes = templateSize + 20_000 };
+            string bigBody = new string('x', 5000);
+            var messages = new List<PlannedMessage>();
+            for (int i = 0; i < 20; i++)
+            {
+                var m = SmallMessage(i);
+                m.Message.TextBody = bigBody;
+                messages.Add(m);
+            }
+            var report = new ConversionReport();
+            string part2 = Path.Combine(outputDir, "Archive-2.pst");
+
+            // Throw on the first WriteMessageCore call once the split has created part 2.
+            // This also exercises the "new part created, no message yet written to it" edge
+            // case: the fatal fires BEFORE base.WriteMessageCore, so part 2 exists but is
+            // empty (BeginSavingChanges only) when the abort happens.
+            var writer = new ThrowingPstWriter(TemplatePath, _ => File.Exists(part2),
+                new InvalidOperationException("boom"), checkIntervalMessages: 2);
+
+            Assert.Throws<InvalidOperationException>(() =>
+                writer.WritePlan(plan, messages, outputDir, report));
+
+            string part1 = Path.Combine(outputDir, "Archive-1.pst");
+            Assert.True(File.Exists(part1), "completed part 1 must remain on disk");
+            Assert.False(File.Exists(part2), "in-progress part 2 must be deleted");
+            // Belt-and-suspenders against split-naming assumptions: the ONLY surviving .pst
+            // is the completed part 1.
+            var pstFiles = Directory.GetFiles(outputDir, "*.pst").Select(Path.GetFileName).ToList();
+            Assert.Contains("Archive-1.pst", pstFiles);
+            Assert.DoesNotContain("Archive-2.pst", pstFiles);
+            Assert.DoesNotContain("Archive.pst", pstFiles);
+        }
+        finally { Directory.Delete(outputDir, true); }
+    }
+}

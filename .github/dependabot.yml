@@ -1,0 +1,40 @@
+# Dependabot — right-sized version updates for a small project (see docs/repo-health-roadmap.md §3).
+# Weekly, one grouped PR per ecosystem to keep review noise low; we review/merge each PR.
+# Note: MimeKit is deliberately pinned (4.17.0) — a proposed MimeKit bump is reviewed against
+# that pin's rationale and usually dismissed unless it carries a security fix.
+version: 2
+updates:
+  - package-ecosystem: "nuget"        # Mail2Pst.sln (engine, CLI, tests)
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      dotnet:
+        patterns: ["*"]
+
+  - package-ecosystem: "npm"          # desktop app (Vite/React/Vitest)
+    directory: "/desktop"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      npm:
+        patterns: ["*"]
+
+  - package-ecosystem: "cargo"        # Tauri shell
+    directory: "/desktop/src-tauri"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      cargo:
+        patterns: ["*"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]

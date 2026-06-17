@@ -1,0 +1,216 @@
+// SPDX-FileCopyrightText: 2026 Aksel Visby (ContinuMail)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#nullable enable
+using System;
+using System.Collections.Generic;
+using System.IO;
+using Mail2Pst.Core;
+using Mail2Pst.Core.Config;
+using Mail2Pst.Core.Models;
+using PSTFileFormat;
+
+namespace Mail2Pst.Core.Writing;
+
+/// <summary>
+/// Owns the output-PST part lifecycle for a single WritePlan call: the current PSTFile
+/// handle, part numbering, rename-on-first-split, the per-part folder cache, the per-part
+/// size estimate/counters, and the predictive + checkpoint splits. Behaviour is a 1:1
+/// extraction of logic previously inline in PstWriter.WritePlan. The write itself is
+/// supplied as a delegate so this class never depends on PstWriter and PSTFile stays
+/// encapsulated.
+/// </summary>
+internal sealed class PstPartManager
+{
+    private readonly string _templatePath;
+    private readonly string _groupName;
+    private readonly string _outputDirectory;
+    private readonly long _maxSizeBytes;
+    private readonly int _checkIntervalMessages;
+    private readonly Action<PSTFile, PSTFolder, MailMessage> _writeMessage;
+    private readonly long _templateSize;
+
+    private readonly List<string> _outputFiles = new();
+    private readonly Dictionary<string, PSTFolder> _folders = new();
+    private PSTFile? _file;
+    private string _currentPath = "";
+    private int _partNumber = 1;
+    private long _estimatedContentBytes;   // per-part; reset on split
+    private int _messagesInCurrentPart;
+    private int _messagesSinceCheck;
+
+    public PstPartManager(string templatePath, string groupName, string outputDirectory,
+        long maxSizeBytes, int checkIntervalMessages,
+        Action<PSTFile, PSTFolder, MailMessage> writeMessage)
+    {
+        _templatePath = templatePath;
+        _groupName = groupName;
+        _outputDirectory = outputDirectory;
+        _maxSizeBytes = maxSizeBytes;
+        _checkIntervalMessages = checkIntervalMessages;
+        _writeMessage = writeMessage;
+        _templateSize = new FileInfo(templatePath).Length;
+    }
+
+    public IReadOnlyList<string> OutputFiles => _outputFiles;
+    public string CurrentPath => _currentPath;
+    public bool CheckpointDue => _messagesSinceCheck >= _checkIntervalMessages;
+
+    /// <summary>
+    /// Opens the first (un-suffixed) part, begins saving, and pre-creates the given folders
+    /// (the IncludeEmptyFolders set). Call exactly once, before the message loop.
+    /// </summary>
+    public void Begin(IReadOnlyList<IReadOnlyList<string>> foldersToPrecreate)
+    {
+        _currentPath = StartNewFile(_groupName, null, _outputDirectory);
+        _outputFiles.Add(_currentPath);
+        _file = new PSTFile(_currentPath, FileAccess.ReadWrite);
+        _file.BeginSavingChanges();
+        foreach (IReadOnlyList<string> path in foldersToPrecreate)
+            GetOrCreateFolder(path);
+    }
+
+    public bool ShouldSplitBefore(long messageSize) =>
+        _messagesInCurrentPart > 0 &&
+        _templateSize + _estimatedContentBytes + messageSize >= _maxSizeBytes;
+
+    /// <summary>Predictive split: flushes the current part, then starts the next.</summary>
+    public void FlushAndSplit()
+    {
+        _file!.EndSavingChanges();
+        StartNextPartAfterFlush();
+    }
+
+    public void Write(IReadOnlyList<string> path, MailMessage message)
+    {
+        PSTFolder folder = GetOrCreateFolder(path);
+        _writeMessage(_file!, folder, message);
+    }
+
+    public void OnWritten(long messageSize)
+    {
+        _estimatedContentBytes += messageSize;
+        _messagesInCurrentPart++;
+        _messagesSinceCheck++;
+    }
+
+    /// <summary>EndSavingChanges only — the checkpoint path flushes here so progress can emit before the size decision.</summary>
+    public void Flush() => _file!.EndSavingChanges();
+
+    /// <summary>
+    /// PRECONDITION: Flush() was just called. Splits if the part reached the cap (returns
+    /// true), else resumes saving (returns false). POSTCONDITION (both branches): the part
+    /// is in an active BeginSavingChanges state, ready for more writes or Finish().
+    /// </summary>
+    public bool TrySplitOrResumeAfterFlush()
+    {
+        long size = Math.Max(_file!.BaseStream.Length, _templateSize + _estimatedContentBytes);
+        if (size >= _maxSizeBytes)
+        {
+            StartNextPartAfterFlush();   // opens the next part with BeginSavingChanges active
+            return true;
+        }
+        _messagesSinceCheck = 0;
+        _file.BeginSavingChanges();
+        return false;
+    }
+
+    public void Finish() => _file!.EndSavingChanges();
+
+    /// <summary>Closes the current handle. Idempotent: nulls the field so a double Close() is a no-op.</summary>
+    public void Close()
+    {
+        _file?.CloseFile();
+        _file = null;
+    }
+
+    public void DeleteCurrentPart() => TryDeletePart(_currentPath);
+
+    // Closes the current (already-flushed) part and opens the next. PRECONDITION: the
+    // caller has just flushed (EndSavingChanges). Builds the next part fully into LOCALS
+    // before mutating shared state, so a StartNewFile/PSTFile failure leaves the last-good
+    // part intact rather than half-initialised.
+    private void StartNextPartAfterFlush()
+    {
+        _file!.CloseFile();
+        if (_partNumber == 1)
+        {
+            // First split: the initial "Name.pst" becomes part 1.
+            string part1 = ResolveOutputPath(_groupName, 1, _outputDirectory);
+            File.Move(_currentPath, part1, overwrite: true);
+            _outputFiles[0] = part1;
+        }
+
+        int nextPartNumber = _partNumber + 1;
+        string nextPath = StartNewFile(_groupName, nextPartNumber, _outputDirectory);
+        PSTFile? nextFile = null;
+        try
+        {
+            nextFile = new PSTFile(nextPath, FileAccess.ReadWrite);
+            nextFile.BeginSavingChanges();
+
+            // New part open and ready — only now mutate shared state.
+            _partNumber = nextPartNumber;
+            _currentPath = nextPath;
+            _outputFiles.Add(nextPath);
+            _file = nextFile;
+            nextFile = null;   // ownership transferred to _file
+            _folders.Clear();
+            _estimatedContentBytes = 0;
+            _messagesSinceCheck = 0;
+            _messagesInCurrentPart = 0;
+        }
+        finally
+        {
+            // If open/BeginSavingChanges threw before ownership transfer, close the orphan
+            // handle so a failed split can't leak the newly opened file. (The pre-refactor
+            // code had this latent leak; tightened here per review 2026-06-17.)
+            nextFile?.CloseFile();
+        }
+    }
+
+    private string StartNewFile(string groupName, int? partNumber, string outputDirectory)
+    {
+        string fullPath = ResolveOutputPath(groupName, partNumber, outputDirectory);
+        File.Copy(_templatePath, fullPath, overwrite: true);
+        return fullPath;
+    }
+
+    private static string ResolveOutputPath(string groupName, int? partNumber, string outputDirectory)
+    {
+        OutputNameValidator.Validate(groupName);
+        string fileName = partNumber is null ? $"{groupName}.pst" : $"{groupName}-{partNumber}.pst";
+        string fullDir = Path.GetFullPath(outputDirectory);
+        string fullPath = Path.GetFullPath(Path.Combine(fullDir, fileName));
+        string relative = Path.GetRelativePath(fullDir, fullPath);
+        if (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative))
+            throw new ConfigValidationException($"Resolved output path escapes the output directory: {fullPath}");
+        return fullPath;
+    }
+
+    private PSTFolder GetOrCreateFolder(IReadOnlyList<string> path)
+    {
+        if (path.Count == 0)
+            throw new InvalidOperationException("GetOrCreateFolder requires a non-empty path.");
+
+        PSTFolder current = _file!.TopOfPersonalFolders;
+        var prefix = new List<string>(path.Count);
+        foreach (string segment in path)
+        {
+            prefix.Add(segment);
+            string key = FolderPathKey.Join(prefix);
+            if (_folders.TryGetValue(key, out PSTFolder? cached)) { current = cached; continue; }
+            current = current.FindChildFolder(segment)
+                      ?? current.CreateChildFolder(segment, FolderItemTypeName.Note);
+            _folders[key] = current; // cache EVERY level, not just the leaf
+        }
+        return current;
+    }
+
+    private static void TryDeletePart(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+}

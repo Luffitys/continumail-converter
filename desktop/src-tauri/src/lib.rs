@@ -38,7 +38,7 @@ fn drain_lines(buf: &mut String) -> Vec<String> {
 async fn run_sidecar(app: &tauri::AppHandle, args: Vec<String>) -> Result<String, String> {
     let output = app
         .shell()
-        .sidecar("mbox2pst-cli")
+        .sidecar("mail2pst-cli")
         .map_err(|e| format!("sidecar not found: {e}"))?
         .args(args)
         .output()
@@ -134,7 +134,7 @@ async fn start_scan(
 
     let (mut rx, child) = app
         .shell()
-        .sidecar("mbox2pst-cli")
+        .sidecar("mail2pst-cli")
         .map_err(|e| format!("sidecar not found: {e}"))?
         .args(args)
         .spawn()
@@ -224,7 +224,7 @@ async fn start_convert(
 
     let (mut rx, child) = app
         .shell()
-        .sidecar("mbox2pst-cli")
+        .sidecar("mail2pst-cli")
         .map_err(|e| format!("sidecar not found: {e}"))?
         .args(["convert", "--config", &config_path_str, "--output", &output_dir])
         .spawn()

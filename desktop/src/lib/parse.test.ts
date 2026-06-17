@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest";
 import { parseEngineOutput, EngineParseError } from "./parse";
 
-const VERSION_LINE = '{"type":"version","version":"0.1.0","engine":"Mbox2Pst.Cli"}';
+const VERSION_LINE = '{"type":"version","version":"0.1.0","engine":"Mail2Pst.Cli"}';
 
 const SCAN_JSON = `{
   "type": "scan",
@@ -26,6 +26,13 @@ describe("parseEngineOutput", () => {
     const r = parseEngineOutput(VERSION_LINE);
     expect(r.kind).toBe("version");
     if (r.kind === "version") expect(r.version).toBe("0.1.0");
+  });
+
+  it("carries schemaVersion onto a parsed scan result", () => {
+    const withVersion = SCAN_JSON.replace('"type": "scan",', '"type": "scan", "schemaVersion": 1,');
+    const r = parseEngineOutput(withVersion);
+    expect(r.kind).toBe("scan");
+    if (r.kind === "scan") expect(r.schemaVersion).toBe(1);
   });
 
   it("parses a pretty-printed scan object", () => {
@@ -54,5 +61,20 @@ describe("parseEngineOutput", () => {
 
   it("throws EngineParseError on unrecognized/garbage input", () => {
     expect(() => parseEngineOutput("hello, no json here")).toThrow(EngineParseError);
+  });
+
+  it("respects braces inside string values when splitting objects", () => {
+    // A displayName containing { and } must not confuse the brace-depth scanner:
+    // the inString tracking has to treat them as literal characters.
+    const withBraces = SCAN_JSON.replace(
+      '"displayName": "sample"',
+      '"displayName": "Inbox {2024} }{ archive"',
+    );
+    const r = parseEngineOutput(withBraces);
+    expect(r.kind).toBe("scan");
+    if (r.kind === "scan") {
+      expect(r.sources).toHaveLength(1);
+      expect(r.sources[0].displayName).toBe("Inbox {2024} }{ archive");
+    }
   });
 });
