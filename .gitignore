@@ -14,9 +14,16 @@ fixtures/takeout-test-config.json
 # Visual-companion brainstorm artifacts (local only)
 .superpowers/
 
-# Root session-handoff scratch note (local-only). Anchored to root so the tracked,
-# export-ignored docs/SESSION-HANDOFF.md is NOT caught by this pattern.
+# Root session-handoff scratch note (local-only)
 /SESSION-HANDOFF.md
 
 # Local manual-test output (PSTs / reports) — never commit
 _manualtest/
+
+# Private dev artifacts — single public-primary repo model (2026-06-18). Kept local on disk,
+# OneDrive-synced, NEVER committed. The .githooks/ leak-check enforces this mechanically.
+docs/
+reviews/
+.claude-memory/
+CLAUDE.md
+todo.md

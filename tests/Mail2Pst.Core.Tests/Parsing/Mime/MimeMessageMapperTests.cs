@@ -150,4 +150,175 @@ public class MimeMessageMapperTests
         att.Content.Dispose();
         Assert.False(File.Exists(tempPath), "temp file must be deleted on dispose");
     }
+
+    [Fact]
+    public void ExtractAttachments_PartWithNoContent_RecordsWarningAndSkipsAttachment()
+    {
+        var mime = new MimeMessage();
+        var multipart = new Multipart("mixed");
+        multipart.Add(new TextPart("plain") { Text = "body" });
+
+        var brokenPart = new MimePart("application", "octet-stream")
+        {
+            FileName = "broken.bin",
+            ContentDisposition = new ContentDisposition(ContentDisposition.Attachment),
+        };
+        multipart.Add(brokenPart);
+        mime.Body = multipart;
+
+        var warnings = new List<string>();
+
+        List<MailAttachment> attachments = new MimeMessageMapper().ExtractAttachments(mime, warnings);
+
+        Assert.Empty(attachments);
+        Assert.Single(warnings);
+        Assert.Contains("broken.bin", warnings[0]);
+        Assert.Contains("application/octet-stream", warnings[0]);
+    }
+
+    [Fact]
+    public void ExtractAttachments_MultipartAlternativeBodyPartsWithContentId_ProducesNoAttachments()
+    {
+        // Regression: LinkedIn-style emails use multipart/alternative with
+        // Content-ID headers on the text/plain and text/html body parts as
+        // labels (e.g. "Content-ID: text-body"). These must NOT be classified
+        // as attachments — they are body content, not inline resources.
+        var mime = new MimeMessage();
+        var alternative = new MultipartAlternative();
+
+        var plainPart = new TextPart("plain") { Text = "plain body" };
+        plainPart.ContentId = "text-body";
+
+        var htmlPart = new TextPart("html") { Text = "<p>html body</p>" };
+        htmlPart.ContentId = "html-body";
+
+        alternative.Add(plainPart);
+        alternative.Add(htmlPart);
+        mime.Body = alternative;
+
+        var warnings = new List<string>();
+
+        List<MailAttachment> attachments = new MimeMessageMapper().ExtractAttachments(mime, warnings);
+
+        Assert.Empty(attachments);
+        Assert.Empty(warnings);
+    }
+
+    [Fact]
+    public void ExtractAttachments_InlineDispositionWithoutContentId_IsInlineWithNullContentId()
+    {
+        var mime = new MimeMessage();
+        var multipart = new Multipart("mixed");
+        multipart.Add(new TextPart("plain") { Text = "body" });
+
+        var inlinePart = new MimePart("application", "octet-stream")
+        {
+            Content = new MimeContent(new MemoryStream(Encoding.UTF8.GetBytes("inline data"))),
+            ContentDisposition = new ContentDisposition(ContentDisposition.Inline),
+        };
+        multipart.Add(inlinePart);
+        mime.Body = multipart;
+
+        var warnings = new List<string>();
+
+        List<MailAttachment> attachments = new MimeMessageMapper().ExtractAttachments(mime, warnings);
+
+        Assert.Empty(warnings);
+        Assert.Single(attachments);
+        MailAttachment attachment = attachments[0];
+        Assert.True(attachment.IsInline);
+        Assert.Null(attachment.ContentId);
+    }
+
+    [Fact]
+    public void ExtractAttachments_PartWithContentLocation_PopulatesContentLocation()
+    {
+        var mime = new MimeMessage();
+        var multipart = new Multipart("mixed");
+        multipart.Add(new TextPart("plain") { Text = "body" });
+
+        const string location = "http://example.com/images/logo.png";
+        var part = new MimePart("image", "png")
+        {
+            FileName = "logo.png",
+            Content = new MimeContent(new MemoryStream(Encoding.UTF8.GetBytes("PNGDATA"))),
+            ContentDisposition = new ContentDisposition(ContentDisposition.Attachment),
+            ContentLocation = new Uri(location),
+        };
+        multipart.Add(part);
+        mime.Body = multipart;
+
+        var warnings = new List<string>();
+
+        List<MailAttachment> attachments = new MimeMessageMapper().ExtractAttachments(mime, warnings);
+
+        Assert.Empty(warnings);
+        Assert.Single(attachments);
+        Assert.Equal(location, attachments[0].ContentLocation);
+    }
+
+    [Fact]
+    public void ExtractAttachments_EmbeddedMessageInMultipartReport_ProducesNoAttachments()
+    {
+        // NDR/bounce messages wrap the original message in multipart/report + message/rfc822.
+        // Gmail hides these as system messages; we must not surface them as phantom attachments.
+        var original = new MimeMessage();
+        original.Subject = "Original";
+        original.Body = new TextPart("plain") { Text = "original body" };
+
+        var report = new Multipart("report");
+        report.Add(new TextPart("plain") { Text = "Delivery failed." });
+
+        var deliveryStatus = new MimePart("message", "delivery-status")
+        {
+            Content = new MimeContent(new System.IO.MemoryStream(System.Text.Encoding.ASCII.GetBytes(
+                "Final-Recipient: rfc822; user@example.com\r\nAction: failed\r\n"))),
+        };
+        report.Add(deliveryStatus);
+
+        var embedded = new MessagePart { Message = original };
+        report.Add(embedded);
+
+        var mime = new MimeMessage();
+        mime.Body = report;
+
+        var warnings = new List<string>();
+        List<MailAttachment> attachments = new MimeMessageMapper().ExtractAttachments(mime, warnings);
+
+        Assert.Empty(attachments);
+        Assert.Empty(warnings);
+    }
+
+    [Fact]
+    public void ExtractAttachments_EmbeddedMessageInNestedMultipartReport_ProducesNoAttachments()
+    {
+        // KB-001: some NDRs nest the multipart/report below the top level (e.g. inside a
+        // multipart/mixed wrapper). The embedded message/rfc822 and the machine-readable
+        // message/delivery-status must still be suppressed, not surface as phantom
+        // attachments — the old check only looked at the top-level body.
+        var original = new MimeMessage { Subject = "Original" };
+        original.Body = new TextPart("plain") { Text = "original body" };
+
+        var report = new Multipart("report");
+        report.Add(new TextPart("plain") { Text = "Delivery failed." });
+        report.Add(new MimePart("message", "delivery-status")
+        {
+            Content = new MimeContent(new MemoryStream(Encoding.ASCII.GetBytes(
+                "Final-Recipient: rfc822; user@example.com\r\nAction: failed\r\n"))),
+        });
+        report.Add(new MessagePart { Message = original });
+
+        var outer = new Multipart("mixed");
+        outer.Add(new TextPart("plain") { Text = "Your message could not be delivered." });
+        outer.Add(report);
+
+        var mime = new MimeMessage();
+        mime.Body = outer;
+
+        var warnings = new List<string>();
+        List<MailAttachment> attachments = new MimeMessageMapper().ExtractAttachments(mime, warnings);
+
+        Assert.Empty(attachments);
+        Assert.Empty(warnings);
+    }
 }

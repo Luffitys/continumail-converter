@@ -137,7 +137,18 @@ internal sealed class PstPartManager
         {
             // First split: the initial "Name.pst" becomes part 1.
             string part1 = ResolveOutputPath(_groupName, 1, _outputDirectory);
-            File.Move(_currentPath, part1, overwrite: true);
+            try
+            {
+                TransientFileRetry.Run(() => File.Move(_currentPath, part1, overwrite: true));
+            }
+            catch (IOException ex)
+            {
+                // Any IOException that escapes the retry helper — a transient violation whose
+                // retries were exhausted, or a non-transient one surfaced immediately — gets a
+                // clear, attributable message instead of a bare File.Move failure.
+                throw new IOException(
+                    $"Failed to rename '{_currentPath}' to '{part1}' while starting split part 2.", ex);
+            }
             _outputFiles[0] = part1;
         }
 
@@ -172,7 +183,7 @@ internal sealed class PstPartManager
     private string StartNewFile(string groupName, int? partNumber, string outputDirectory)
     {
         string fullPath = ResolveOutputPath(groupName, partNumber, outputDirectory);
-        File.Copy(_templatePath, fullPath, overwrite: true);
+        TransientFileRetry.Run(() => File.Copy(_templatePath, fullPath, overwrite: true));
         return fullPath;
     }
 

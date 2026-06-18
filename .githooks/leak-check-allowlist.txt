@@ -1,0 +1,21 @@
+# Leak-check email allowlist. One per line: a full address (a@b.com) or a domain (@b.com).
+# Lines starting with # are comments. Lowercased on load.
+
+# RFC 2606 reserved synthetic domains used by fixtures/tests
+@example.com
+@example.net
+@example.org
+
+# Synthetic placeholder domains used throughout the unit-test suite (not real recipients).
+# (Migrating these tests to @example.* would let us drop these two — minor future cleanup.)
+@x.com
+@b.com
+
+# Legitimate third-party references that may appear in tracked files
+noreply@github.com
+
+# Vendored PSTFileFormat (LGPL) upstream author attribution in file headers — public, legitimate.
+tal@kmrom.com
+
+# Project's own contact (appears in README / SECURITY / source headers)
+aksel@visby.it

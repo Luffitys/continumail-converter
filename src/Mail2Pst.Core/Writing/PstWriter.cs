@@ -254,13 +254,57 @@ public class PstWriter
     }
 
     // Lightweight HTML-to-text fallback for clients that don't render PidTagHtml; not a full HTML parser.
-    private static string HtmlToPlainText(string html)
+    // internal (not private) so it can be unit-tested directly; visible to the test assembly via
+    // InternalsVisibleTo("Mail2Pst.Core.Tests"). Guarded against regex ReDoS: see HtmlRegexTimeout /
+    // HtmlScriptStyleStripMaxChars. Degraded plain text is acceptable; this method must never throw
+    // from the guard path.
+    internal static string HtmlToPlainText(string html)
     {
-        string withoutScriptsAndStyles = Regex.Replace(html, "(?is)<(script|style)\\b[^>]*>.*?</\\1>", " ");
-        string withoutTags = Regex.Replace(withoutScriptsAndStyles, "<[^>]*>", " ");
+        // Script/style removal is the backtracking vector. Skip it above the size cap;
+        // otherwise run it under a timeout and fall back to the un-stripped html on timeout.
+        string withoutScriptsAndStyles = html;
+        if (html.Length <= HtmlScriptStyleStripMaxChars)
+        {
+            try
+            {
+                withoutScriptsAndStyles = ScriptStyleRegex.Replace(html, " ");
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                withoutScriptsAndStyles = html;
+            }
+        }
+
+        string withoutTags;
+        try
+        {
+            withoutTags = HtmlTagRegex.Replace(withoutScriptsAndStyles, " ");
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            withoutTags = withoutScriptsAndStyles;
+        }
+
         string decoded = WebUtility.HtmlDecode(withoutTags);
         return Regex.Replace(decoded, @"[ \t]+", " ").Trim();
     }
+
+    // HtmlToPlainText ReDoS guard. The script/style removal uses a lazy match that
+    // can backtrack badly on pathological HTML (e.g. an unclosed <script>). Bound it
+    // with a regex timeout and skip it entirely above a size cap; the <[^>]*> tag
+    // strip is linear but carries a timeout defensively.
+    private const int HtmlScriptStyleStripMaxChars = 1_000_000;
+    private static readonly TimeSpan HtmlRegexTimeout = TimeSpan.FromSeconds(2);
+
+    private static readonly Regex ScriptStyleRegex = new(
+        @"<(script|style)\b[^>]*>.*?</\1>",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant,
+        HtmlRegexTimeout);
+
+    private static readonly Regex HtmlTagRegex = new(
+        @"<[^>]*>",
+        RegexOptions.CultureInvariant,
+        HtmlRegexTimeout);
 
     // Per-message PST structural overhead not captured by the content byte counts below:
     // node B-tree entry (~128 B) + property-context heap for ~20 properties (~512 B) +
@@ -277,6 +321,13 @@ public class PstWriter
     // typical messages; the backstop covers the rare many-tiny-inline-attachments case where
     // this flat constant under-counts the aggregate.
     private const long PerAttachmentOverheadBytes = 512;
+
+    // MAPI bit flags for PidTagMessageFlags (MS-OXCMSG) and the inline-attachment
+    // PidTagAttachFlags value (MS-OXCMSG ATT_MHTML_REF). Named here so the bit math
+    // at the write sites reads intentionally instead of as raw hex.
+    private const int MSGFLAG_READ = 0x0001;
+    private const int MSGFLAG_HASATTACH = 0x0010;
+    private const int ATT_MHTML_REF = 4;
 
     internal static long EstimateMessageSize(MailMessage message)
     {
@@ -400,13 +451,13 @@ public class PstWriter
         // control the two bits we own (MSGFLAG_READ, MSGFLAG_HASATTACH) and
         // preserve everything else Note.CreateNewNote/AddAttachment set.
         int messageFlags = note.PC.GetInt32Property(PropertyID.PidTagMessageFlags) ?? 0;
-        if (message.IsRead) messageFlags |= 0x0001;
-        else messageFlags &= ~0x0001;
+        if (message.IsRead) messageFlags |= MSGFLAG_READ;
+        else messageFlags &= ~MSGFLAG_READ;
         // Only set MSGFLAG_HASATTACH for non-inline attachments. Inline (CID)
         // images are part of the HTML body, not user-visible attachments, so a
         // message whose only attachments are inline must not show a paperclip.
-        if (message.Attachments.Any(a => !a.IsInline)) messageFlags |= 0x0010;
-        else messageFlags &= ~0x0010;
+        if (message.Attachments.Any(a => !a.IsInline)) messageFlags |= MSGFLAG_HASATTACH;
+        else messageFlags &= ~MSGFLAG_HASATTACH;
         note.PC.SetInt32Property(PropertyID.PidTagMessageFlags, messageFlags);
 
         note.SaveChanges();
@@ -440,7 +491,7 @@ public class PstWriter
 
         if (a.IsInline)
         {
-            attachment.PC.SetInt32Property(PropertyID.PidTagAttachFlags, 4); // ATT_MHTML_REF
+            attachment.PC.SetInt32Property(PropertyID.PidTagAttachFlags, ATT_MHTML_REF);
             // Hide inline (CID) images from the attachment list so Outlook does
             // not render a paperclip for body-embedded images.
             attachment.PC.SetBooleanProperty(PropertyID.PidTagAttachmentHidden, true);

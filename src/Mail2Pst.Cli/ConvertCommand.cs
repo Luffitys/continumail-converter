@@ -1,0 +1,181 @@
+// SPDX-FileCopyrightText: 2026 Aksel Visby (ContinuMail)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#nullable enable
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading;
+using Mail2Pst.Core;
+using Mail2Pst.Core.Config;
+using Mail2Pst.Core.Progress;
+
+namespace Mail2Pst.Cli;
+
+internal static class ConvertCommand
+{
+    internal static int Run(string[] args)
+    {
+        string? configPath = CliArgs.Flag(args, "--config");
+        string? outputDir  = CliArgs.Flag(args, "--output");
+
+        if (configPath is null || outputDir is null)
+        {
+            Console.Error.WriteLine("Usage: continumail-convert convert --config <config.json> --output <dir>");
+            return 1;
+        }
+
+        if (!File.Exists(configPath))
+        {
+            CliArgs.WriteJsonLine(new { type = "error", stage = "convert", message = $"Config not found: {configPath}", fatal = true });
+            Console.Error.WriteLine($"Config not found: {configPath}");
+            return 1;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(outputDir);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            CliArgs.WriteJsonLine(new { type = "error", stage = "convert", message = $"Failed to create output directory: {ex.Message}", fatal = true });
+            Console.Error.WriteLine($"Failed to create output directory: {ex.Message}");
+            return 1;
+        }
+
+        CliArgs.WriteJsonLine(new { type = "started", input = configPath, outputDirectory = outputDir });
+
+        ConversionConfig config;
+        try
+        {
+            config = ConfigLoader.Load(configPath);
+        }
+        catch (Exception ex)
+        {
+            CliArgs.WriteJsonLine(new { type = "error", stage = "convert", message = $"Failed to load config: {ex.Message}", fatal = true });
+            Console.Error.WriteLine($"Failed to load config: {ex.Message}");
+            return 1;
+        }
+
+        // The blank PST seed lives embedded in the engine assembly; extract it to a
+        // temp file (cleaned up in the finally below). The single-file sidecar is run
+        // from a relocated dir with no loose assets/ folder beside it.
+        string templatePath = TemplateProvider.ExtractToTempFile();
+        var runner = new ConversionRunner(templatePath);
+
+        using var cts = new CancellationTokenSource();
+
+        // Trigger 1 (the Tauri-on-Windows path): a "cancel" line on stdin. Background,
+        // non-blocking, and quiet when stdin is closed/redirected/non-interactive.
+        var stdinReader = new Thread(() =>
+        {
+            try
+            {
+                string? line;
+                while ((line = Console.In.ReadLine()) is not null)
+                {
+                    if (string.Equals(line.Trim(), "cancel", StringComparison.OrdinalIgnoreCase))
+                    {
+                        cts.Cancel();
+                        return;
+                    }
+                }
+            }
+            catch (IOException) { }
+            catch (ObjectDisposedException) { }
+        }) { IsBackground = true };
+        stdinReader.Start();
+
+        // Trigger 2: Ctrl+C / SIGINT. e.Cancel = true prevents the runtime's hard exit
+        // so cleanup can run.
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+
+        // Trigger 3: SIGTERM (graceful termination from a parent process / manual CLI).
+        // PosixSignal.SIGTERM is supported cross-platform by the .NET runtime — on Windows
+        // it maps to the native termination path — so no #if/OS guard is needed here.
+        // ctx.Cancel = true requests a graceful stop.
+        using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
+        {
+            ctx.Cancel = true;
+            cts.Cancel();
+        });
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        try
+        {
+            var report = runner.Run(config, outputDir, evt =>
+            {
+                switch (evt)
+                {
+                    case ScanEvent s:
+                        CliArgs.WriteJsonLine(new { type = "scan", totalMessages = s.TotalMessages });
+                        break;
+                    case ProgressEvent p:
+                        CliArgs.WriteJsonLine(new { type = "progress", converted = p.Converted, total = p.TotalMessages,
+                            warnings = p.Warnings, skipped = p.Skipped, bytes = p.EstimatedOutputBytes,
+                            currentSource = p.CurrentSource, currentFolder = p.CurrentFolder });
+                        break;
+                    case WarningEvent w:
+                        CliArgs.WriteJsonLine(new { type = "warning", source = w.Source, identifier = w.Identifier, reason = w.Reason });
+                        break;
+                }
+            }, cts.Token);
+
+            stopwatch.Stop();
+
+            if (report.Cancelled)
+            {
+                // Terminal and mutually exclusive with `done`: do not write the success
+                // reports. Surface what was deleted and what completed parts remain.
+                CliArgs.WriteJsonLine(new
+                {
+                    type = "cancelled",
+                    deleted = report.DeletedFiles,
+                    outputs = report.OutputFiles,
+                    converted = report.ConvertedCount,
+                    skipped = report.SkippedCount,
+                    warnings = report.WarningCount,
+                    elapsedMs = stopwatch.ElapsedMilliseconds,
+                });
+                return 2;
+            }
+
+            string reportJsonPath = Path.Combine(outputDir, "conversion-report.json");
+            File.WriteAllText(reportJsonPath, report.ToJson());
+
+            string reportTxtPath = Path.Combine(outputDir, "conversion-report.txt");
+            File.WriteAllText(reportTxtPath, report.ToSummary());
+
+            CliArgs.WriteJsonLine(new
+            {
+                type = "done",
+                converted = report.ConvertedCount,
+                skipped = report.SkippedCount,
+                warnings = report.WarningCount,
+                outputs = report.OutputFiles,
+                outputDirectory = outputDir,
+                report = reportJsonPath,
+                elapsedMs = stopwatch.ElapsedMilliseconds,
+            });
+
+            return 0;
+        }
+        catch (ConfigValidationException ex)
+        {
+            CliArgs.WriteJsonLine(new { type = "error", stage = "convert", message = ex.Message, fatal = true });
+            Console.Error.WriteLine($"Config error: {ex.Message}");
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            CliArgs.WriteJsonLine(new { type = "error", stage = "convert", message = ex.Message, fatal = true });
+            Console.Error.WriteLine($"Fatal error: {ex.Message}");
+            return 1;
+        }
+        finally
+        {
+            try { File.Delete(templatePath); } catch { /* best-effort temp cleanup */ }
+        }
+    }
+}

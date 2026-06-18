@@ -1,0 +1,15 @@
+# Line endings: store LF in the repo and check out LF on every platform. Kills the recurring
+# "LF will be replaced by CRLF" warnings and matches the engine's LF source. (Single public-primary
+# repo, 2026-06-18 — replaces the old export-ignore .gitattributes, which is obsolete.)
+* text=auto eol=lf
+
+# Binary assets — never normalize their bytes.
+*.pst   binary
+*.png   binary
+*.ico   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.woff  binary
+*.woff2 binary

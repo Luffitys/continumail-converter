@@ -1,0 +1,5 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 Aksel Visby (ContinuMail)
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Pre-commit leak guard. Blocks the commit if staged content trips the scanner.
+exec node "$(dirname "$0")/leak-check.mjs"

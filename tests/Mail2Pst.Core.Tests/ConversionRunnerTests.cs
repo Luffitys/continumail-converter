@@ -154,7 +154,7 @@ public class ConversionRunnerTests
         try
         {
             // This fixture contains a single message whose attachment part has
-            // no content body, which causes MboxParser.ExtractAttachments to
+            // no content body, which causes MimeMessageMapper.ExtractAttachments to
             // record a non-fatal warning while still parsing the message. The
             // assertion below exercises the ConversionRunner seam that copies
             // each ParseResult.Warnings entry into report.Warnings.

@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Aksel Visby (ContinuMail)
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: leak-check
+on: [push, pull_request]
+jobs:
+  leak-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run leak-check over the pushed/PR range
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          elif [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+            RANGE="4b825dc642cb6eb9a060e54bf8d69288fbee4904..${{ github.sha }}"
+          else
+            RANGE="${{ github.event.before }}..${{ github.sha }}"
+          fi
+          echo "leak-check range: $RANGE"
+          node .githooks/leak-check.mjs --range "$RANGE"

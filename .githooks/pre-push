@@ -1,0 +1,26 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 Aksel Visby (ContinuMail)
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Pre-push leak guard — the last gate before commits leave this machine. Reads the push
+# plan on stdin (one line per ref: "<local-ref> <local-sha> <remote-ref> <remote-sha>") and
+# scans each pushed range. Falls back to scanning against the remote default if no base.
+status=0
+z40=0000000000000000000000000000000000000000
+empty_tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904   # git's well-known empty-tree object
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$z40" ] && continue   # branch deletion: nothing to scan
+  if [ "$remote_sha" = "$z40" ]; then
+    # New branch on the remote: scan the tip commit against its parent (NOT against the
+    # working tree — `git diff <sha>` would compare to the tree and scan nothing on a clean
+    # checkout). Fall back to the empty tree for the repo's very first commit.
+    if git rev-parse --quiet --verify "${local_sha}^" >/dev/null 2>&1; then
+      range="${local_sha}^..${local_sha}"
+    else
+      range="${empty_tree}..${local_sha}"
+    fi
+  else
+    range="$remote_sha..$local_sha"
+  fi
+  node "$(dirname "$0")/leak-check.mjs" --range "$range" || status=1
+done
+exit $status

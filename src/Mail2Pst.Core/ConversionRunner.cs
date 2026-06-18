@@ -76,6 +76,14 @@ public class ConversionRunner
                 List<string> outputFiles = _writer.WritePlan(plan, plannedMessages, outputDirectory, report, total, onProgress, cancellationToken);
                 report.AddOutputFiles(outputFiles);
             }
+
+            // Post-conversion smoke test: prove every written PST opens and holds exactly the
+            // messages we counted, before this run can be reported as `done`. A failure throws
+            // InvalidDataException (not OperationCanceledException), so it is NOT caught below —
+            // it propagates out of Run to the CLI's fatal error path. Runs only here, on the
+            // fully-successful path: cancellation throws out of the loop above and never reaches
+            // this line, and the writer's own fatal aborts have already propagated.
+            PstOutputVerifier.Verify(report.OutputFiles, report.ConvertedCount);
         }
         catch (OperationCanceledException)
         {

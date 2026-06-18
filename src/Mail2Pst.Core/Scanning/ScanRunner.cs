@@ -36,12 +36,17 @@ public class ScanRunner
         // fail before we touch any file, and the lookup is identical for every source.
         IMailSourceParser parser = ParserRegistry.Get(sourceType);
 
-        // Total bytes to scan = sum of all source sizes. (FileInfo.Length throws
-        // FileNotFoundException for a missing path — same exception the per-file
-        // loop already raised, so existing missing-file behavior is preserved.)
+        // Stat each source once: reused below for per-source sourceBytes. FileInfo.Length still
+        // throws FileNotFoundException here (before any parsing) for a missing path, preserving the
+        // existing missing-file behavior exactly.
+        long[] sourceSizes = new long[paths.Count];
         long scanTotalBytes = 0;
-        foreach (string p in paths)
-            scanTotalBytes += new FileInfo(p).Length;
+        for (int i = 0; i < paths.Count; i++)
+        {
+            long length = new FileInfo(paths[i]).Length;
+            sourceSizes[i] = length;
+            scanTotalBytes += length;
+        }
 
         // Progress accounting is kept in its OWN variable, decoupled from the
         // report's `totalSourceBytes` total, so an agent can't accidentally break
@@ -64,7 +69,7 @@ public class ScanRunner
 
             string id = MakeUniqueId(path, usedIds, i);
             string displayName = System.IO.Path.GetFileNameWithoutExtension(path);
-            long sourceBytes = new FileInfo(path).Length;
+            long sourceBytes = sourceSizes[i];
 
             int messages = 0;
             long estimatedBytes = 0;

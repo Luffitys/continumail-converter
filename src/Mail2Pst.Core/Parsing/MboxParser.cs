@@ -253,11 +253,4 @@ public class MboxParser : IMailSourceParser
 
         return true;
     }
-
-    // Test-compat shim: the real attachment extraction now lives in MimeMessageMapper. Existing
-    // MboxParserTests call MboxParser.ExtractAttachments directly, so this thin delegate preserves
-    // that seam without re-housing the logic. (Migrating those tests to the mapper + dropping this
-    // shim is a trivial follow-up, deliberately out of scope.)
-    internal List<MailAttachment> ExtractAttachments(MimeMessage mime, List<string> warnings) =>
-        _mapper.ExtractAttachments(mime, warnings);
 }

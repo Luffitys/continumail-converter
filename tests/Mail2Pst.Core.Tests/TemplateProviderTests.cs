@@ -48,4 +48,48 @@ public class TemplateProviderTests
             if (File.Exists(path)) File.Delete(path);
         }
     }
+
+    [Fact]
+    public void SweepStaleTemplates_RemovesOnlyOldMatchingFiles()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "mail2pst-sweep-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string oldMatching = Path.Combine(dir, "continumail-template-aaa.pst");
+            string newMatching = Path.Combine(dir, "continumail-template-bbb.pst");
+            string boundaryMatching = Path.Combine(dir, "continumail-template-boundary.pst");
+            string oldNonMatching = Path.Combine(dir, "something-else.pst");
+            File.WriteAllText(oldMatching, "x");
+            File.WriteAllText(newMatching, "x");
+            File.WriteAllText(boundaryMatching, "x");
+            File.WriteAllText(oldNonMatching, "x");
+
+            DateTime now = DateTime.UtcNow;
+            DateTime cutoff = now.AddHours(-24);
+            File.SetLastWriteTimeUtc(oldMatching, now.AddHours(-25));
+            File.SetLastWriteTimeUtc(newMatching, now);
+            File.SetLastWriteTimeUtc(boundaryMatching, cutoff); // exactly at cutoff
+            File.SetLastWriteTimeUtc(oldNonMatching, now.AddHours(-25));
+
+            TemplateProvider.SweepStaleTemplates(dir, cutoff);
+
+            Assert.False(File.Exists(oldMatching));     // old + matching name -> swept
+            Assert.True(File.Exists(newMatching));       // matching name but too new -> kept
+            Assert.True(File.Exists(boundaryMatching));  // exactly at cutoff -> kept (strict <)
+            Assert.True(File.Exists(oldNonMatching));    // old but wrong name -> kept
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
+    public void SweepStaleTemplates_MissingDirectory_DoesNotThrow()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "mail2pst-sweep-missing-" + Guid.NewGuid().ToString("N"));
+        // Directory is never created — enumeration must fail silently (best-effort).
+        TemplateProvider.SweepStaleTemplates(dir, DateTime.UtcNow);
+    }
 }

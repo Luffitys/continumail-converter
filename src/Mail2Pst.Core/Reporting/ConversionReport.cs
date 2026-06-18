@@ -21,7 +21,7 @@ public class ConversionReport
     private readonly List<string> _deletedFiles = new();
     private volatile bool _cancelled;
 
-    public int ConvertedCount => _convertedCount;
+    public int ConvertedCount => Volatile.Read(ref _convertedCount);
 
     // Cheap, lock-protected counts for the hot path (progress ticks) that don't
     // need to copy the whole list.
